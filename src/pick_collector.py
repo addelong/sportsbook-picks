@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect top picks from r/sportsbook Pick of the Day thread."""
+"""Collect top picks from Reddit betting threads (Pick of the Day, Best Bets, etc.)."""
 
 from __future__ import annotations
 
@@ -7,16 +7,17 @@ import argparse
 import datetime as dt
 import re
 import sys
-from html import escape
+import urllib.parse
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import requests
 
 REDDIT_BASE = "https://www.reddit.com"
-SEARCH_URL = (
-    "{base}/r/{sub}/search.json?q=title%3A%22Pick%20of%20the%20Day%22&restrict_sr=1&sort=new&limit=1"
+SEARCH_URL_TEMPLATE = (
+    "{base}/r/{sub}/search.json?q={query}&restrict_sr=1&sort=new&limit=1"
 )
 COMMENTS_URL = "{base}/comments/{post_id}.json?limit=500"
 USER_AGENT = "sportsbook-picks-bot/0.1 (by u/your_username)"
@@ -24,6 +25,10 @@ USER_AGENT = "sportsbook-picks-bot/0.1 (by u/your_username)"
 RE_RECORD = re.compile(r"\b(\d{1,3})-(\d{1,3})(?:-(\d{1,3}))?\b")
 BETA_ALPHA = 5.0
 BETA_BETA = 5.0
+DEFAULT_TITLE_QUERIES = {
+    "sportsbook": 'title:"Pick of the Day"',
+    "sportsbetting": 'title:"Best Bets"',
+}
 FIELD_PATTERNS: Dict[str, List[re.Pattern[str]]] = {
     "pick": [
         re.compile(
@@ -104,6 +109,12 @@ BET_PREFIXES = (
 
 
 @dataclass
+class SourceConfig:
+    subreddit: str
+    query: str
+
+
+@dataclass
 class PickEntry:
     author: str
     wins: int
@@ -111,6 +122,8 @@ class PickEntry:
     pushes: int
     win_pct: float
     adjusted_pct: float
+    source: str
+    thread_title: str
     game: Optional[str]
     pick: Optional[str]
     sport: Optional[str]
@@ -130,6 +143,8 @@ class PickEntry:
             self.record_text(),
             f"{self.win_pct:.3f}",
             f"{self.adjusted_pct:.3f}",
+            self.source,
+            self.thread_title,
             self.game or "",
             self.pick or "",
             self.sport or "",
@@ -147,8 +162,9 @@ class RedditClient:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": user_agent})
 
-    def fetch_latest_thread(self, subreddit: str, base: str = REDDIT_BASE) -> dict:
-        url = SEARCH_URL.format(base=base, sub=subreddit)
+    def fetch_latest_thread(self, subreddit: str, query: str, base: str = REDDIT_BASE) -> dict:
+        encoded_query = urllib.parse.quote(query)
+        url = SEARCH_URL_TEMPLATE.format(base=base, sub=subreddit, query=encoded_query)
         response = self.session.get(url, timeout=self.timeout)
         if response.status_code != 200:
             raise RuntimeError(f"Failed to fetch search results: {response.status_code}")
@@ -257,6 +273,32 @@ def looks_like_sport_line(text: str) -> Optional[str]:
     return None
 
 
+def normalize_query(subreddit: str, query: Optional[str]) -> SourceConfig:
+    base_query = DEFAULT_TITLE_QUERIES.get(subreddit.lower(), 'title:"Pick of the Day"')
+    trimmed = (query or "").strip()
+    if not trimmed:
+        normalized = base_query
+    else:
+        normalized = trimmed if trimmed.lower().startswith("title:") else f'title:"{trimmed}"'
+    return SourceConfig(subreddit=subreddit, query=normalized)
+
+
+def parse_subreddit_specs(specs: Optional[List[str]]) -> List[SourceConfig]:
+    if not specs:
+        return [normalize_query("sportsbook", None)]
+    configs: List[SourceConfig] = []
+    for spec in specs:
+        if "=" in spec:
+            name, raw_query = spec.split("=", 1)
+        else:
+            name, raw_query = spec, ""
+        name = name.strip()
+        if not name:
+            raise ValueError("Subreddit name cannot be empty")
+        configs.append(normalize_query(name, raw_query))
+    return configs
+
+
 def split_game_and_detail(text: str) -> Tuple[Optional[str], Optional[str]]:
     for pattern in SPLIT_MARKERS:
         match = pattern.search(text)
@@ -362,7 +404,7 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         "time": None,
         "recommended_wager": None,
     }
-    aux: Dict[str, Optional[str]] = {"odds": None}
+    aux: Dict[str, Optional[str]] = {"odds": None, "book": None}
 
     for idx, line in enumerate(material):
         stripped = line.strip()
@@ -461,7 +503,12 @@ def flatten_comments(comments: Iterable[dict]) -> Iterable[dict]:
             yield from flatten_comments([reply])
 
 
-def collect_picks(comments: Iterable[dict], base_permalink: str) -> List[PickEntry]:
+def collect_picks(
+    comments: Iterable[dict],
+    base_permalink: str,
+    source: str,
+    thread_title: str,
+) -> List[PickEntry]:
     picks: List[PickEntry] = []
     for comment in comments:
         body = comment.get("body", "")
@@ -483,6 +530,8 @@ def collect_picks(comments: Iterable[dict], base_permalink: str) -> List[PickEnt
                 pushes=pushes,
                 win_pct=win_pct,
                 adjusted_pct=adjusted_pct,
+                source=source,
+                thread_title=thread_title,
                 game=fields["game"],
                 pick=fields["pick"],
                 sport=fields["sport"],
@@ -515,6 +564,8 @@ def to_html(picks: List[PickEntry], title: str) -> str:
         f"<td>{_esc(p.record_text())}</td>"
         f"<td>{p.win_pct:.3f}</td>"
         f"<td>{p.adjusted_pct:.3f}</td>"
+        f"<td>{_esc(p.source)}</td>"
+        f"<td>{_esc(p.thread_title)}</td>"
         f"<td>{_esc(p.game)}</td>"
         f"<td>{_esc(p.pick)}</td>"
         f"<td>{_esc(p.sport)}</td>"
@@ -541,7 +592,7 @@ caption {{ margin-bottom: 1rem; font-size: 1.1rem; font-weight: bold; }}
 <table>
 <caption>{safe_title} — Generated {now.strftime('%Y-%m-%d %H:%M %Z')}</caption>
 <thead>
-<tr><th>Author</th><th>Record</th><th>Win %</th><th>Adj Win %</th><th>Game / Match</th><th>Bet</th><th>Sport</th><th>Time</th><th>Recommended Wager</th><th>Permalink</th></tr>
+<tr><th>Author</th><th>Record</th><th>Win %</th><th>Adj Win %</th><th>Subreddit</th><th>Thread</th><th>Game / Match</th><th>Bet</th><th>Sport</th><th>Time</th><th>Recommended Wager</th><th>Permalink</th></tr>
 </thead>
 <tbody>
 {rows}
@@ -559,7 +610,15 @@ def write_output(picks: List[PickEntry], output: Path, title: str) -> None:
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--subreddit", default="sportsbook", help="Subreddit to search")
+    parser.add_argument(
+        "--subreddit",
+        dest="subreddits",
+        action="append",
+        help=(
+            "Subreddit to search; repeatable."
+            " Use the form 'name' or 'name=Pick of the Day' or 'name=title:\"Best Bets\"'."
+        ),
+    )
     parser.add_argument("--output", default="output/top_picks.html", help="Output HTML file path")
     parser.add_argument("--limit", type=int, default=10, help="Limit number of picks to include")
     parser.add_argument(
@@ -580,40 +639,119 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def thread_from_url(url: str) -> tuple[str, str]:
-    match = re.search(r"comments/([a-z0-9]+)/", url)
-    if not match:
+def thread_from_url(url: str) -> tuple[str, str, Optional[str]]:
+    id_match = re.search(r"comments/([a-z0-9]+)/", url)
+    if not id_match:
         raise ValueError("Could not extract thread id from URL")
-    post_id = match.group(1)
-    return post_id, url
+    subreddit_match = re.search(r"/r/([^/]+)/comments/", url)
+    subreddit = subreddit_match.group(1) if subreddit_match else None
+    post_id = id_match.group(1)
+    return post_id, url, subreddit
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     client = RedditClient(user_agent=args.user_agent)
 
+    all_picks: List[PickEntry] = []
+    thread_titles: List[str] = []
+
     if args.thread_url:
-        post_id, permalink = thread_from_url(args.thread_url)
-        thread_data = {"id": post_id, "permalink": permalink, "title": "Pick of the Day"}
-    else:
-        thread_data = client.fetch_latest_thread(args.subreddit, base=args.base_url)
-        post_id = thread_data.get("id")
+        post_id, permalink, subreddit = thread_from_url(args.thread_url)
         if not post_id:
-            raise RuntimeError("Thread missing id")
-    comments_json = client.fetch_comments(post_id, base=args.base_url)
-    flattened = list(flatten_comments(comments_json))
-    picks = collect_picks(flattened, base_permalink=thread_data.get("permalink", "/"))
+            raise RuntimeError("Could not determine post id from thread URL")
+        try:
+            comments_json = client.fetch_comments(post_id, base=args.base_url)
+        except RuntimeError as exc:
+            print(f"Failed to fetch comments for provided thread URL: {exc}", file=sys.stderr)
+            return 1
+        flattened = list(flatten_comments(comments_json))
+        parsed = urllib.parse.urlparse(permalink)
+        base_permalink = parsed.path or "/"
+        thread_title = f"Custom thread ({subreddit or 'reddit'})"
+        source_label = subreddit or "custom"
+        picks = collect_picks(
+            flattened,
+            base_permalink=base_permalink,
+            source=source_label,
+            thread_title=thread_title,
+        )
+        if picks:
+            all_picks.extend(picks)
+            thread_titles.append(thread_title)
+    else:
+        try:
+            source_configs = parse_subreddit_specs(args.subreddits)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
 
-    if args.limit:
-        picks = picks[: args.limit]
+        for config in source_configs:
+            try:
+                thread_data = client.fetch_latest_thread(
+                    config.subreddit, config.query, base=args.base_url
+                )
+            except RuntimeError as exc:
+                print(
+                    f"Warning: failed to locate thread for r/{config.subreddit} using query '{config.query}': {exc}",
+                    file=sys.stderr,
+                )
+                continue
 
-    if not picks:
+            post_id = thread_data.get("id")
+            if not post_id:
+                print(
+                    f"Warning: thread missing id for r/{config.subreddit}; skipping",
+                    file=sys.stderr,
+                )
+                continue
+
+            try:
+                comments_json = client.fetch_comments(post_id, base=args.base_url)
+            except RuntimeError as exc:
+                print(
+                    f"Warning: failed to fetch comments for r/{config.subreddit}: {exc}",
+                    file=sys.stderr,
+                )
+                continue
+
+            flattened = list(flatten_comments(comments_json))
+            thread_title = thread_data.get("title", f"r/{config.subreddit} thread")
+            picks = collect_picks(
+                flattened,
+                base_permalink=thread_data.get("permalink", "/"),
+                source=config.subreddit,
+                thread_title=thread_title,
+            )
+            if picks:
+                all_picks.extend(picks)
+                thread_titles.append(thread_title)
+
+    if not all_picks:
         print("No picks found with record + pick information", file=sys.stderr)
         return 1
 
-    title = thread_data.get("title", "Pick of the Day Picks")
-    write_output(picks, Path(args.output), title)
-    print(f"Wrote {len(picks)} picks to {args.output}")
+    all_picks.sort(
+        key=lambda p: (
+            p.adjusted_pct,
+            p.wins + p.losses,
+            p.win_pct,
+        ),
+        reverse=True,
+    )
+
+    if args.limit:
+        all_picks = all_picks[: args.limit]
+
+    if thread_titles and len(set(thread_titles)) == 1:
+        report_title = thread_titles[0]
+    elif thread_titles:
+        report_title = "Reddit Top Picks"
+    else:
+        report_title = "Top Picks"
+
+    write_output(all_picks, Path(args.output), report_title)
+    print(f"Wrote {len(all_picks)} picks to {args.output}")
     return 0
 
 
