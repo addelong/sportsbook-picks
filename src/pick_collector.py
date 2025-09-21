@@ -569,10 +569,14 @@ def collect_picks(
 ) -> List[PickEntry]:
     picks: List[PickEntry] = []
     for idx, comment in enumerate(comments):
-        if logger.isEnabledFor(logging.INFO) and idx % 25 == 0:
-            logger.info("Processing comment index %d", idx)
+        logger.debug("Processing comment index %d", idx)
         body = comment.get("body", "")
-        record = parse_record(body)
+        logger.debug("Comment %d snippet: %s", idx, body[:120].replace("\n", " "))
+        try:
+            record = parse_record(body)
+        except Exception as exc:
+            logger.error("Failed to parse record on comment %d: %s", idx, exc, exc_info=True)
+            continue
         if not record:
             continue
         wins = record.wins
@@ -721,7 +725,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
 
     logging.basicConfig(
-        level=logging.INFO if args.verbose else logging.WARNING,
+        level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(asctime)s %(levelname)s %(message)s",
     )
     logger.debug("Parsed arguments: %s", args)
