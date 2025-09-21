@@ -464,10 +464,19 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                         value = value.strip()
                     if value:
                         existing = result.get(key)
-                        if key == "pick" and existing and len(existing) >= len(value):
-                            logger.debug(
-                                "Keeping existing pick '%s' over shorter value '%s'", existing, value
-                            )
+                        if key == "pick" and existing:
+                            has_letters_existing = any(ch.isalpha() for ch in existing)
+                            has_letters_new = any(ch.isalpha() for ch in value)
+                            should_replace = False
+                            if has_letters_new and not has_letters_existing:
+                                should_replace = True
+                            elif len(value) > len(existing):
+                                should_replace = True
+                            if should_replace:
+                                logger.debug(
+                                    "Replacing pick '%s' with '%s'", existing, value
+                                )
+                                result[key] = value
                         else:
                             result[key] = value
                     captured = True
