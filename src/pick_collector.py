@@ -221,16 +221,19 @@ def parse_record(text: str) -> Optional[RecordStats]:
     descriptor = f"{window_before} {window_after}"
     display = match.group(0)
 
-    # Default convention: Wins – Pushes – Losses
     if third is not None:
         wins = first
-        pushes = second
-        losses = third
+        second_val = second
+        third_val = third
+
+        if any(tag in descriptor for tag in ("w-d-l", "w d l", "w-draw-l", "w draw l")):
+            return RecordStats(wins=wins, losses=third_val, pushes=second_val, display=display)
 
         if any(tag in descriptor for tag in ("w-l-p", "w l p", "w-l-t", "w l t", "w-l-d", "w l d")):
-            pushes = third
-            losses = second
+            return RecordStats(wins=wins, losses=second_val, pushes=third_val, display=display)
 
+        pushes = min(second_val, third_val)
+        losses = max(second_val, third_val)
         return RecordStats(wins=wins, losses=losses, pushes=pushes, display=display)
 
     # Two-value records: wins-losses
