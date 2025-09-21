@@ -115,6 +115,14 @@ class SourceConfig:
 
 
 @dataclass
+class RecordStats:
+    wins: int
+    losses: int
+    pushes: int
+    display: str
+
+
+@dataclass
 class PickEntry:
     author: str
     wins: int
@@ -124,6 +132,7 @@ class PickEntry:
     adjusted_pct: float
     source: str
     thread_title: str
+    record_display: str
     game: Optional[str]
     pick: Optional[str]
     sport: Optional[str]
@@ -132,10 +141,7 @@ class PickEntry:
     permalink: str
 
     def record_text(self) -> str:
-        record = f"{self.wins}-{self.losses}"
-        if self.pushes:
-            record += f"-{self.pushes}"
-        return record
+        return self.record_display
 
     def as_row(self) -> List[str]:
         return [
@@ -185,16 +191,44 @@ class RedditClient:
         return payload[1]["data"]["children"]
 
 
-def parse_record(text: str) -> Optional[tuple[int, int, int]]:
+def parse_record(text: str) -> Optional[RecordStats]:
     match = RE_RECORD.search(text)
     if not match:
         return None
-    wins = int(match.group(1))
-    losses = int(match.group(2))
-    pushes = int(match.group(3) or 0)
-    if wins + losses + pushes == 0:
+
+    first = int(match.group(1))
+    second = int(match.group(2))
+    third_raw = match.group(3)
+    third = int(third_raw) if third_raw is not None else None
+    if first + second + (third or 0) == 0:
         return None
-    return wins, losses, pushes
+
+    window_after = text[match.end() : match.end() + 20].lower()
+    window_before = text[max(0, match.start() - 20) : match.start()].lower()
+    descriptor = f"{window_before} {window_after}"
+
+    display = match.group(0)
+
+    if third is None:
+        return RecordStats(wins=first, losses=second, pushes=0, display=display)
+
+    if any(tag in descriptor for tag in ("w-d-l", "w d l", "w-draw-l", "wdrawl")):
+        wins = first
+        draws = second
+        losses = third
+        return RecordStats(wins=wins, losses=losses, pushes=draws, display=display)
+
+    if any(tag in descriptor for tag in ("w-l-d", "w l d", "w-l-t", "w l t", "w-l-p", "w l p")):
+        wins = first
+        losses = second
+        pushes = third
+        return RecordStats(wins=wins, losses=losses, pushes=pushes, display=display)
+
+    # Default: assume W-L-P ordering
+    wins = first
+    losses = second
+    pushes = third
+    return RecordStats(wins=wins, losses=losses, pushes=pushes, display=display)
 
 
 def compute_win_pct(wins: int, losses: int) -> float:
@@ -515,7 +549,9 @@ def collect_picks(
         record = parse_record(body)
         if not record:
             continue
-        wins, losses, pushes = record
+        wins = record.wins
+        losses = record.losses
+        pushes = record.pushes
         fields = extract_pick_fields(body.splitlines())
         if not any(value for key, value in fields.items() if key != "game"):
             continue
@@ -532,6 +568,7 @@ def collect_picks(
                 adjusted_pct=adjusted_pct,
                 source=source,
                 thread_title=thread_title,
+                record_display=record.display,
                 game=fields["game"],
                 pick=fields["pick"],
                 sport=fields["sport"],
