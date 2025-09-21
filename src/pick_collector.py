@@ -584,12 +584,16 @@ def collect_picks(
             logger.error("Failed to parse record on comment %d: %s", idx, exc, exc_info=True)
             continue
         if not record:
+            logger.debug("No record found for comment %d", idx)
             continue
+        logger.debug("Record parsed for comment %d: %s", idx, record)
         wins = record.wins
         losses = record.losses
         pushes = record.pushes
         fields = extract_pick_fields(body.splitlines())
+        logger.debug("Fields extracted for comment %d: %s", idx, fields)
         if not any(value for key, value in fields.items() if key != "game"):
+            logger.debug("Skipping comment %d due to missing pick fields", idx)
             continue
         win_pct = compute_win_pct(wins, losses)
         adjusted_pct = compute_adjusted_pct(wins, losses)
