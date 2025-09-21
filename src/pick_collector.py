@@ -463,6 +463,13 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                             value = ""
                         value = value.strip()
                     if value:
+                        if key == "pick" and not any(ch.isalpha() for ch in value):
+                            logger.debug(
+                                "Ignoring pick candidate without letters: '%s' (line %s)",
+                                value,
+                                line.strip(),
+                            )
+                            continue
                         existing = result.get(key)
                         if key == "pick" and existing:
                             has_letters_existing = any(ch.isalpha() for ch in existing)
@@ -601,12 +608,12 @@ def collect_picks(
         pushes = record.pushes
         fields = extract_pick_fields(body.splitlines())
         logger.debug("Fields extracted for comment %d: %s", idx, fields)
-        if not any(value for key, value in fields.items() if key != "game"):
-            logger.debug("Skipping comment %d due to missing pick fields", idx)
-            continue
         if fields.get("pick") is None and fields.get("game"):
             logger.debug("No explicit pick found for comment %d; using game as bet", idx)
             fields["pick"] = fields["game"]
+        if not any(value for key, value in fields.items() if key != "game"):
+            logger.debug("Skipping comment %d due to missing pick fields", idx)
+            continue
         win_pct = compute_win_pct(wins, losses)
         adjusted_pct = compute_adjusted_pct(wins, losses)
         permalink = f"{REDDIT_BASE}{comment.get('permalink', base_permalink)}"
