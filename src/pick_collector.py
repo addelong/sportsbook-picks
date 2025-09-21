@@ -451,7 +451,7 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             continue
         captured = False
         for key, patterns in FIELD_PATTERNS.items():
-            if result[key]:
+            if key != "pick" and result[key]:
                 continue
             for pattern in patterns:
                 match = pattern.match(line)
