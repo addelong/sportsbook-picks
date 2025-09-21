@@ -441,6 +441,8 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         stripped = line.strip()
         if not stripped:
             continue
+        if stripped.lower().startswith("last pick"):
+            continue
         captured = False
         for key, patterns in FIELD_PATTERNS.items():
             if result[key]:
