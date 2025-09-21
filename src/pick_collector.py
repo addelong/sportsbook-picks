@@ -284,6 +284,8 @@ def looks_like_plain_matchup(text: str) -> Optional[str]:
     candidate = text.strip()
     if not candidate:
         return None
+    if not re.search(r"[a-zA-Z]", candidate):
+        return None
     lowered = candidate.lower()
     if any(word in lowered for word in ("record", "analysis", "units", "bet", "odds", "stake", "roi", "notes")):
         return None
@@ -523,6 +525,8 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
     book = aux.get("book")
     if result["pick"] and book and book.lower() not in result["pick"].lower():
         result["pick"] = f"{result['pick']} ({book})"
+    if result["pick"] and result["sport"] and result["pick"].strip().lower() == result["sport"].strip().lower():
+        result["pick"] = None
 
     return result
 
