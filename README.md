@@ -28,6 +28,7 @@ Key flags:
 - `--user-agent` – pass a Reddit-friendly UA string to reduce `429` responses.
 - `--limit` – cap the number of picks in the generated report (default 10).
 - `--subreddit` – repeatable; accepts `name`, `name=Pick of the Day`, or a full query such as `name=title:"Best Bets"`. Defaults to `r/sportsbook`.
+- `--verbose` – print INFO-level logging (handy when monitoring long fetches).
 
 Outputs land in `output/top_picks.html` by default.
 

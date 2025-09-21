@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import logging
 import re
 import sys
 import urllib.parse
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 REDDIT_BASE = "https://www.reddit.com"
 SEARCH_URL_TEMPLATE = (
@@ -694,6 +697,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Optional explicit thread permalink (.json will be fetched)",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging output",
+    )
     return parser.parse_args(argv)
 
 
@@ -709,6 +717,12 @@ def thread_from_url(url: str) -> tuple[str, str, Optional[str]]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.INFO if args.verbose else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    logger.debug("Parsed arguments: %s", args)
     client = RedditClient(user_agent=args.user_agent)
 
     all_picks: List[PickEntry] = []
@@ -719,11 +733,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not post_id:
             raise RuntimeError("Could not determine post id from thread URL")
         try:
+            logger.info("Fetching comments for provided thread %s", post_id)
             comments_json = client.fetch_comments(post_id, base=args.base_url)
         except RuntimeError as exc:
             print(f"Failed to fetch comments for provided thread URL: {exc}", file=sys.stderr)
             return 1
         flattened = list(flatten_comments(comments_json))
+        logger.info("Flattened %d top-level comments from custom thread", len(flattened))
         parsed = urllib.parse.urlparse(permalink)
         base_permalink = parsed.path or "/"
         thread_title = f"Custom thread ({subreddit or 'reddit'})"
@@ -737,6 +753,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if picks:
             all_picks.extend(picks)
             thread_titles.append(thread_title)
+            logger.info("Collected %d picks from provided thread", len(picks))
+        else:
+            logger.info("No picks collected from provided thread")
     else:
         try:
             source_configs = parse_subreddit_specs(args.subreddits)
@@ -745,6 +764,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
 
         for config in source_configs:
+            logger.info("Searching r/%s with query %s", config.subreddit, config.query)
             try:
                 thread_data = client.fetch_latest_thread(
                     config.subreddit, config.query, base=args.base_url
@@ -754,6 +774,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"Warning: failed to locate thread for r/{config.subreddit} using query '{config.query}': {exc}",
                     file=sys.stderr,
                 )
+                logger.info("No thread found for r/%s", config.subreddit)
                 continue
 
             post_id = thread_data.get("id")
@@ -762,18 +783,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"Warning: thread missing id for r/{config.subreddit}; skipping",
                     file=sys.stderr,
                 )
+                logger.info("Skipping r/%s because thread missing id", config.subreddit)
                 continue
 
             try:
+                logger.info("Fetching comments for r/%s post %s", config.subreddit, post_id)
                 comments_json = client.fetch_comments(post_id, base=args.base_url)
             except RuntimeError as exc:
                 print(
                     f"Warning: failed to fetch comments for r/{config.subreddit}: {exc}",
                     file=sys.stderr,
                 )
+                logger.info("Failed fetching comments for r/%s", config.subreddit)
                 continue
 
             flattened = list(flatten_comments(comments_json))
+            logger.info("Flattened %d comment nodes for r/%s", len(flattened), config.subreddit)
             thread_title = thread_data.get("title", f"r/{config.subreddit} thread")
             picks = collect_picks(
                 flattened,
@@ -784,10 +809,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             if picks:
                 all_picks.extend(picks)
                 thread_titles.append(thread_title)
+                logger.info("Collected %d picks from r/%s", len(picks), config.subreddit)
+            else:
+                logger.info("No picks collected from r/%s thread", config.subreddit)
 
     if not all_picks:
         print("No picks found with record + pick information", file=sys.stderr)
         return 1
+
+    logger.info("Collected a total of %d picks before limiting", len(all_picks))
 
     all_picks.sort(
         key=lambda p: (
@@ -809,6 +839,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         report_title = "Top Picks"
 
     write_output(all_picks, Path(args.output), report_title)
+    logger.info("Wrote %d picks to %s with title %s", len(all_picks), args.output, report_title)
     print(f"Wrote {len(all_picks)} picks to {args.output}")
     return 0
 
