@@ -569,8 +569,8 @@ def collect_picks(
 ) -> List[PickEntry]:
     picks: List[PickEntry] = []
     for idx, comment in enumerate(comments):
-        if logger.isEnabledFor(logging.DEBUG) and idx % 25 == 0:
-            logger.debug("Processing comment index %d", idx)
+        if logger.isEnabledFor(logging.INFO) and idx % 25 == 0:
+            logger.info("Processing comment index %d", idx)
         body = comment.get("body", "")
         record = parse_record(body)
         if not record:
