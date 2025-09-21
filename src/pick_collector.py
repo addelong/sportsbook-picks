@@ -32,7 +32,7 @@ DEFAULT_TITLE_QUERIES = {
 FIELD_PATTERNS: Dict[str, List[re.Pattern[str]]] = {
     "pick": [
         re.compile(
-            r"^\s*[-•*>\u2022\u2013\u2014]*\s*(?:pick|play|today'?s\s+pick|todays\s+pick|selection|bet(?:\s+on)?)\s*(?:[:\-\u2013\u2014|]\s*)?(.*)$",
+            r"^\s*[-•*>\u2022\u2013\u2014]*\s*(?:pick|play|potd|best\s+bets?|today'?s\s+pick|todays\s+pick|selection|bet(?:\s+on)?)\s*(?:[:\-\u2013\u2014|]\s*)?(.*)$",
             re.I,
         ),
     ],
@@ -515,9 +515,23 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
 
     if result["game"]:
         game_text, inferred_time = split_game_and_time(result["game"])
+        sport_from_game = None
+        if game_text and "(" in game_text and ")" in game_text:
+            match = re.search(r"\(([^)]+)\)\s*$", game_text)
+            if match:
+                maybe_sport = match.group(1).strip()
+                cleaned_sport = looks_like_sport_line(maybe_sport)
+                sport_from_game = cleaned_sport or (
+                    maybe_sport.title()
+                    if maybe_sport.isupper() and 2 <= len(maybe_sport) <= 40
+                    else None
+                )
+                game_text = game_text[: match.start()].rstrip(" ,;-@/\t")
         result["game"] = game_text
         if inferred_time and not result["time"]:
             result["time"] = inferred_time
+        if sport_from_game and not result["sport"]:
+            result["sport"] = sport_from_game
 
     odds = aux.get("odds")
     if result["pick"] and odds and odds.lower() not in result["pick"].lower():
