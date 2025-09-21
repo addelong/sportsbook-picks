@@ -595,6 +595,9 @@ def collect_picks(
         if not any(value for key, value in fields.items() if key != "game"):
             logger.debug("Skipping comment %d due to missing pick fields", idx)
             continue
+        if fields.get("pick") is None and fields.get("game"):
+            logger.debug("No explicit pick found for comment %d; using game as bet", idx)
+            fields["pick"] = fields["game"]
         win_pct = compute_win_pct(wins, losses)
         adjusted_pct = compute_adjusted_pct(wins, losses)
         permalink = f"{REDDIT_BASE}{comment.get('permalink', base_permalink)}"
