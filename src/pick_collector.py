@@ -32,6 +32,15 @@ DEFAULT_TITLE_QUERIES = {
     "sportsbook": 'title:"Pick of the Day"',
     "sportsbetting": 'title:"Best Bets"',
 }
+PICK_KEY_TOKENS = {
+    "pick",
+    "play",
+    "potd",
+    "today's pick",
+    "todays pick",
+    "selection",
+    "bet",
+}
 FIELD_PATTERNS: Dict[str, List[re.Pattern[str]]] = {
     "pick": [
         re.compile(
@@ -454,6 +463,10 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             if key != "pick" and result[key]:
                 continue
             for pattern in patterns:
+                if key == "pick":
+                    normalized_preview = line.lower().replace("\u2019", "'")
+                    if not any(token in normalized_preview for token in PICK_KEY_TOKENS):
+                        continue
                 match = pattern.match(line)
                 if match:
                     value = match.group(1).strip()
