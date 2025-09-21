@@ -200,34 +200,31 @@ def parse_record(text: str) -> Optional[RecordStats]:
     second = int(match.group(2))
     third_raw = match.group(3)
     third = int(third_raw) if third_raw is not None else None
+
     if first + second + (third or 0) == 0:
         return None
 
-    window_after = text[match.end() : match.end() + 20].lower()
-    window_before = text[max(0, match.start() - 20) : match.start()].lower()
+    window_after = text[match.end() : match.end() + 30].lower()
+    window_before = text[max(0, match.start() - 30) : match.start()].lower()
     descriptor = f"{window_before} {window_after}"
-
     display = match.group(0)
 
-    if third is None:
-        return RecordStats(wins=first, losses=second, pushes=0, display=display)
-
-    if any(tag in descriptor for tag in ("w-d-l", "w d l", "w-draw-l", "wdrawl")):
+    # Default convention: Wins – Pushes – Losses
+    if third is not None:
         wins = first
-        draws = second
+        pushes = second
         losses = third
-        return RecordStats(wins=wins, losses=losses, pushes=draws, display=display)
 
-    if any(tag in descriptor for tag in ("w-l-d", "w l d", "w-l-t", "w l t", "w-l-p", "w l p")):
-        wins = first
-        losses = second
-        pushes = third
+        if any(tag in descriptor for tag in ("w-l-p", "w l p", "w-l-t", "w l t", "w-l-d", "w l d")):
+            pushes = third
+            losses = second
+
         return RecordStats(wins=wins, losses=losses, pushes=pushes, display=display)
 
-    # Default: assume W-L-P ordering
+    # Two-value records: wins-losses
     wins = first
     losses = second
-    pushes = third
+    pushes = 0
     return RecordStats(wins=wins, losses=losses, pushes=pushes, display=display)
 
 

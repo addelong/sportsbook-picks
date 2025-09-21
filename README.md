@@ -54,7 +54,7 @@ Adjust the paths if you place the repository elsewhere. The redirect keeps a rol
 - Totals/props without a clear matchup stay in the `Bet` column—the parser avoids treating lines that start with bet keywords (`over`, `under`, `ML`, etc.) as games.
 - Ranking uses a Bayesian-smoothed win percentage (Beta(5,5) prior) so large samples outrank tiny perfect records; both raw and adjusted rates are displayed.
 - Records formatted as `12-5` or `18-9-2` are used to compute win percentage; comments without a record or pick fields are skipped.
-- Records labeled `W-D-L` (ties in the middle slot) are detected automatically so win percentages stay accurate.
+- Three-value records are treated as Wins–Pushes–Losses by default, with support for explicit `W-L-P`/`W-L-T` labels.
 - The script only touches the public JSON endpoints. To add authenticated API usage later, wrap `RedditClient` with a PRAW-based implementation.
 - Set `SUBREDDITS="sportsbook,sportsbetting=title:\"Best Bets\""` in `bin/run_collector.sh` (or the environment) to mirror the CLI example above.
 
