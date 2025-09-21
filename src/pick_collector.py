@@ -32,7 +32,7 @@ DEFAULT_TITLE_QUERIES = {
 FIELD_PATTERNS: Dict[str, List[re.Pattern[str]]] = {
     "pick": [
         re.compile(
-            r"^\s*[-•*>\u2022\u2013\u2014]*\s*(?:pick|play|potd|best\s+bets?|today'?s\s+pick|todays\s+pick|selection|bet(?:\s+on)?)\s*(?:[:\-\u2013\u2014|]\s*)?(.*)$",
+            r"^\s*(?:[^\w\s]+|\d+\.)*\s*(?:pick|play|potd|best\s+bets?|today'?s\s+pick|todays\s+pick|selection|bet(?:\s+on)?)\s*(?:[:\-\u2013\u2014|]\s*)?(.*)$",
             re.I,
         ),
     ],
@@ -244,6 +244,7 @@ def clean_pick_text(text: str) -> str:
     text = MARKDOWN_LINK.sub(lambda m: m.group("label"), text)
     text = text.replace("**", "").replace("*", "")
     text = re.sub(r"[`_]+", "", text)
+    text = re.sub(r"^[^A-Za-z0-9]+", "", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
@@ -507,7 +508,10 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                 else:
                     detail = game
             else:
-                result["game"] = game
+                if detail:
+                    detail = f"{game} {detail}" if not detail.lower().startswith(game.lower()) else detail
+                else:
+                    detail = game
         if detail:
             result["pick"] = detail
         if stake and not result["recommended_wager"]:
