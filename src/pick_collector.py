@@ -463,7 +463,13 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                             value = ""
                         value = value.strip()
                     if value:
-                        result[key] = value
+                        existing = result.get(key)
+                        if key == "pick" and existing and len(existing) >= len(value):
+                            logger.debug(
+                                "Keeping existing pick '%s' over shorter value '%s'", existing, value
+                            )
+                        else:
+                            result[key] = value
                     captured = True
                     break
             if captured:
