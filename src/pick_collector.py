@@ -620,6 +620,9 @@ def collect_picks(
                 permalink=permalink,
             )
         )
+        logger.debug(
+            "Appended pick for comment %d: author=%s pick=%s", idx, comment.get("author", "unknown"), fields["pick"]
+        )
     picks.sort(
         key=lambda p: (
             p.adjusted_pct,
