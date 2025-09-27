@@ -91,7 +91,7 @@ SPLIT_MARKERS = [
     re.compile(r"\b(tt\s+over|tt\s+under)\b", re.I),
     re.compile(r"\b(ml|moneyline)\b", re.I),
     re.compile(r"\b(btts)\b", re.I),
-    re.compile(r"\b([-+]\s?\d+(?:\.\d+)?)"),
+    re.compile(r"[-+]\s?\d+(?:\.\d+)?"),
 ]
 TIME_IN_TEXT = re.compile(
     r"(\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)\s*(?:[A-Z]{2,5})?)",
@@ -269,7 +269,7 @@ def peel_trailing_parenthetical(detail: str) -> Tuple[str, Optional[str]]:
     match = re.search(r"\(([^)]*\b\d+(?:\.\d+)?\s*(?:u|units?|unit)[^)]*)\)\s*$", stripped, re.I)
     if not match:
         return detail, None
-    stake = match.group(1).strip()
+    stake = _clean_stake_text(match.group(1))
     trimmed = stripped[: match.start()].rstrip(",; -")
     return trimmed, stake
 
@@ -284,7 +284,16 @@ def peel_trailing_stake(detail: str) -> Tuple[str, Optional[str]]:
         return detail, None
     stake = stripped[match.start() :].strip(" ,;-")
     trimmed = stripped[: match.start()].rstrip(" ,;-")
-    return trimmed, stake
+    return trimmed, _clean_stake_text(stake)
+
+
+def _clean_stake_text(stake: Optional[str]) -> Optional[str]:
+    if not stake:
+        return None
+    cleaned = stake.strip()
+    # Remove trailing stake separators that sneak in from prefixes like "1u -"
+    cleaned = cleaned.rstrip("-: ")
+    return cleaned or None
 
 
 def looks_like_bet_prefix(text: str) -> bool:
@@ -406,18 +415,18 @@ def parse_pick_text(raw: Optional[str]) -> Tuple[Optional[str], Optional[str], O
     cleaned = clean_pick_text(raw)
     if not cleaned:
         return None, None, None
-    stake = None
+    stake: Optional[str] = None
     stake_match = STAKE_PREFIX.match(cleaned)
     if stake_match:
-        stake = stake_match.group(0).strip()
+        stake = _clean_stake_text(stake_match.group(0))
         cleaned = cleaned[stake_match.end() :].strip()
     cleaned = cleaned.lstrip("-: ")
     game, detail = split_game_and_detail(cleaned)
     if detail:
         detail, trailing_stake = peel_trailing_stake(detail)
         if trailing_stake and not stake:
-            stake = trailing_stake
-    return game, detail, stake
+            stake = _clean_stake_text(trailing_stake)
+    return game, detail, _clean_stake_text(stake)
 
 
 def _is_field_line(line: str) -> bool:
@@ -541,20 +550,32 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                     break
 
     if result["pick"]:
-        game, detail, stake = parse_pick_text(result["pick"])
-        if game:
-            if result["game"]:
-                if detail:
-                    detail = f"{game} {detail}" if not detail.lower().startswith(game.lower()) else detail
-                else:
-                    detail = game
-            else:
-                if detail:
-                    detail = f"{game} {detail}" if not detail.lower().startswith(game.lower()) else detail
-                else:
-                    detail = game
-        if detail:
-            result["pick"] = detail
+        original_pick = result["pick"].strip()
+        game, detail, stake = parse_pick_text(original_pick)
+        normalized_game = game.strip() if game else None
+        if normalized_game:
+            existing_game = result.get("game") or ""
+            if not existing_game or len(normalized_game) > len(existing_game):
+                result["game"] = normalized_game
+        cleaned_detail = detail.strip() if detail else ""
+        if cleaned_detail and normalized_game:
+            lowered_detail = cleaned_detail.lower()
+            lowered_game = normalized_game.lower()
+            matchup_markers = (" vs", " @", " v ", " versus ")
+            if lowered_detail.startswith(lowered_game) and any(
+                marker in lowered_detail for marker in matchup_markers
+            ):
+                trimmed = cleaned_detail[len(normalized_game) :].lstrip(" ,;-@")
+                if trimmed:
+                    cleaned_detail = trimmed
+        if cleaned_detail:
+            if normalized_game and normalized_game.lower() not in cleaned_detail.lower():
+                simple_game = normalized_game.lower()
+                if not any(marker in simple_game for marker in (" vs", " @", " v ", " versus ", " at ")):
+                    cleaned_detail = f"{normalized_game} {cleaned_detail}"
+            result["pick"] = cleaned_detail
+        else:
+            result["pick"] = original_pick
         if stake and not result["recommended_wager"]:
             result["recommended_wager"] = stake
 
