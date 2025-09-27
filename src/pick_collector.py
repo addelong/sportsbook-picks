@@ -26,6 +26,13 @@ COMMENTS_URL = "{base}/comments/{post_id}.json?limit=500"
 USER_AGENT = "sportsbook-picks-bot/0.1 (by u/your_username)"
 
 RE_RECORD = re.compile(r"\b(\d{1,3})-(\d{1,3})(?:-(\d{1,3}))?\b")
+RE_RECORD_LINE = re.compile(r"\brecord\b", re.I)
+RE_PARENTHESES_PUSH = re.compile(
+    r"^\s*\(\s*(\d{1,3})\s*(?:push(?:es)?|ties?|draws?)\s*\)"
+    r"|^\s*\(\s*(\d{1,3})\s*\)"
+    r"|^\s*[\-–—]\s*(\d{1,3})\s*(?:push(?:es)?|ties?|draws?)\b",
+    re.I,
+)
 BETA_ALPHA = 5.0
 BETA_BETA = 5.0
 DEFAULT_TITLE_QUERIES = {
@@ -45,6 +52,10 @@ FIELD_PATTERNS: Dict[str, List[re.Pattern[str]]] = {
     "pick": [
         re.compile(
             r"^\s*(?:[^\w\s]+|\d+\.)*\s*(?:pick|play|potd|best\s+bets?|today'?s\s+pick|todays\s+pick|selection|bet(?:\s+on)?)\s*(?:[:\-\u2013\u2014|]\s*)?(.*)$",
+            re.I,
+        ),
+        re.compile(
+            r"^\s*today'?s\s+potd\s*(?:[:\-\u2013\u2014|]\s*)?(.*)$",
             re.I,
         ),
     ],
@@ -68,7 +79,7 @@ FIELD_PATTERNS: Dict[str, List[re.Pattern[str]]] = {
     ],
     "recommended_wager": [
         re.compile(
-            r"^\s*[-•*>\u2022\u2013\u2014]*\s*(?:units?(?:\s+played)?|unit\s*size|stake|risk|(?:recommended\s*)?wager|bet\s*size|investment|units?\s*risked)\s*(?:[:\-\u2013\u2014|]\s*)?(.*)$",
+            r"^\s*[-•*>\u2022\u2013\u2014]*\s*(?:units?(?:\s+played)?|unit\s*size|stake|risk|(?:recommended\s*)?wager(?:\s+amount)?|bet\s*size|investment|units?\s*risked)\s*(?:[:\-\u2013\u2014|]\s*)?(.*)$",
             re.I,
         ),
     ],
@@ -219,7 +230,20 @@ def parse_record(text: str) -> Optional[RecordStats]:
     window_after = text[match.end() : match.end() + 30].lower()
     window_before = text[max(0, match.start() - 30) : match.start()].lower()
     descriptor = f"{window_before} {window_after}"
-    display = match.group(0)
+    display_end = match.end()
+
+    remainder = text[display_end : display_end + 40]
+    paren_match = RE_PARENTHESES_PUSH.match(remainder)
+    if paren_match and third is None:
+        third_candidate = next(
+            int(group)
+            for group in paren_match.groups()
+            if group is not None
+        )
+        third = third_candidate
+        display_end += paren_match.end()
+
+    display = text[match.start() : display_end].strip()
 
     if third is not None:
         wins = first
@@ -261,6 +285,13 @@ def clean_pick_text(text: str) -> str:
     text = re.sub(r"[`_]+", "", text)
     text = re.sub(r"^[^A-Za-z0-9]+", "", text)
     text = re.sub(r"\s+", " ", text)
+    if text.count(")") > text.count("("):
+        surplus = text.count(")") - text.count("(")
+        for _ in range(surplus):
+            idx = text.rfind(")")
+            if idx == -1:
+                break
+            text = text[:idx] + text[idx + 1 :]
     return text.strip()
 
 
@@ -319,9 +350,26 @@ def looks_like_plain_matchup(text: str) -> Optional[str]:
     return None
 
 
+def looks_like_record_heading(text: str) -> bool:
+    candidate = text.strip()
+    if not candidate:
+        return False
+    lowered = candidate.lower()
+    if not RE_RECORD_LINE.search(lowered):
+        return False
+    if lowered.startswith(("record", "season record", "overall record")):
+        return True
+    if RE_RECORD.search(candidate):
+        return True
+    return False
+
+
 def looks_like_sport_line(text: str) -> Optional[str]:
     candidate = text.strip()
     if not candidate:
+        return None
+    lowered = candidate.lower()
+    if "record" in lowered or lowered.startswith(("net units", "units", "last pick", "previous pick")):
         return None
     if "|" in candidate and len(candidate) <= 80:
         return re.sub(r"\s+", " ", candidate)
@@ -367,6 +415,18 @@ def split_game_and_detail(text: str) -> Tuple[Optional[str], Optional[str]]:
             if game:
                 if looks_like_bet_prefix(game):
                     return None, text.strip() or None
+                if detail:
+                    lowered_detail = detail.lower()
+                    if lowered_detail.startswith("to win"):
+                        parts = [segment.strip(" ,;-@/\t") for segment in re.split(r"\s*[-\u2013\u2014]\s*", game) if segment]
+                        if len(parts) >= 2:
+                            candidate = parts[-1]
+                            prefix = " - ".join(parts[:-1]).strip(" ,;-@/\t")
+                            if candidate:
+                                game = prefix or game
+                                detail = f"{candidate} {detail}".strip()
+                    if "+" in game and "+" not in detail:
+                        detail = f"{game} {detail}".strip()
                 return game, detail or None
     ou_match = re.search(r"\s[ou][0-9]", text, re.I)
     if ou_match:
@@ -468,7 +528,10 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         stripped = line.strip()
         if not stripped:
             continue
-        if stripped.lower().startswith("last pick"):
+        lowered = stripped.lower()
+        if lowered.startswith(("last pick", "previous pick", "prior pick", "prior potd")):
+            continue
+        if looks_like_record_heading(stripped):
             continue
         captured = False
         for key, patterns in FIELD_PATTERNS.items():
@@ -488,6 +551,8 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                             value = ""
                         value = value.strip()
                     if value:
+                        if key == "pick" and looks_like_record_heading(value):
+                            continue
                         if key == "pick" and not any(ch.isalpha() for ch in value):
                             logger.debug(
                                 "Ignoring pick candidate without letters: '%s' (line %s)",
@@ -553,6 +618,10 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         original_pick = result["pick"].strip()
         game, detail, stake = parse_pick_text(original_pick)
         normalized_game = game.strip() if game else None
+        if normalized_game and "+" in normalized_game:
+            parts = [part.strip() for part in normalized_game.split("+") if part.strip()]
+            if parts:
+                normalized_game = " / ".join(parts)
         if normalized_game:
             existing_game = result.get("game") or ""
             if not existing_game or len(normalized_game) > len(existing_game):
@@ -562,7 +631,7 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             lowered_detail = cleaned_detail.lower()
             lowered_game = normalized_game.lower()
             matchup_markers = (" vs", " @", " v ", " versus ")
-            if lowered_detail.startswith(lowered_game) and any(
+            if "+" not in normalized_game and lowered_detail.startswith(lowered_game) and any(
                 marker in lowered_detail for marker in matchup_markers
             ):
                 trimmed = cleaned_detail[len(normalized_game) :].lstrip(" ,;-@")
