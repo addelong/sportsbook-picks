@@ -1,6 +1,6 @@
 # Sportsbook Pick Collector
 
-A small utility that grabs daily pick threads from Reddit betting communities (e.g. `r/sportsbook`’s **Pick of the Day**, `r/sportsbetting`’s **Best Bets**), extracts user picks with posted records, ranks them by win percentage, and writes the result to a simple HTML report.
+A small utility that grabs the daily **Pick of the Day** thread from `r/sportsbook`, extracts user picks with posted records, ranks them by win percentage, and writes the result to a simple HTML report.
 
 > ⚠️ Reddit recently tightened unauthenticated API access. Supply a descriptive `User-Agent` and consider a `thread_url` override if you hit rate limits.
 
@@ -18,7 +18,6 @@ pip install -r requirements.txt
 python src/pick_collector.py \
   --output output/top_picks.html \
   --subreddit sportsbook \
-  --subreddit sportsbetting=title:"Best Bets" \
   --limit 20
 ```
 
@@ -27,7 +26,7 @@ Key flags:
 - `--thread-url` – manually point at a specific Pick of the Day permalink (handy if the search API falls behind).
 - `--user-agent` – pass a Reddit-friendly UA string to reduce `429` responses.
 - `--limit` – cap the number of picks in the generated report (default 10).
-- `--subreddit` – repeatable; accepts `name`, `name=Pick of the Day`, or a full query such as `name=title:"Best Bets"`. Defaults to `r/sportsbook`.
+- `--subreddit` – repeatable; accepts `name`, `name=Pick of the Day`, or a custom query. Defaults to `r/sportsbook`. (Other communities often lack consistent daily threads and may require manual `--thread-url` overrides.)
 - `--verbose` – print INFO-level logging (handy when monitoring long fetches).
 - `--debug-output` – write a JSON companion file with comment-level parsing diagnostics (useful for debugging parser logic).
 
@@ -46,7 +45,6 @@ When the debug flag is supplied, a second JSON file is written alongside the HTM
 - Records formatted as `12-5` or `18-9-2` are used to compute win percentage; comments without a record or pick fields are skipped.
 - Three-value records are treated as Wins–Pushes–Losses by default, with support for explicit `W-L-P`/`W-L-T` labels.
 - The script only touches the public JSON endpoints. To add authenticated API usage later, wrap `RedditClient` with a PRAW-based implementation.
-- Set `SUBREDDITS="sportsbook,sportsbetting=title:\"Best Bets\""` in `bin/run_collector.sh` (or the environment) to mirror the CLI example above.
 
 ## Output Format
 

@@ -38,7 +38,7 @@ BETA_ALPHA = 5.0
 BETA_BETA = 5.0
 DEFAULT_TITLE_QUERIES = {
     "sportsbook": 'title:"Pick of the Day"',
-    "sportsbetting": 'title:"Best Bets"',
+    "sportsbetting": 'title:("Best Bet" OR "Best Bets" OR "Best Bet Thread")',
 }
 PICK_KEY_TOKENS = {
     "pick",
