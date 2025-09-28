@@ -5,14 +5,15 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import logging
 import re
 import sys
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from html import escape
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
@@ -694,19 +695,43 @@ def collect_picks(
     base_permalink: str,
     source: str,
     thread_title: str,
+    debug_entries: Optional[List[Dict[str, Any]]] = None,
 ) -> List[PickEntry]:
     picks: List[PickEntry] = []
     for idx, comment in enumerate(comments):
         logger.debug("Processing comment index %d", idx)
         body = comment.get("body", "")
         logger.debug("Comment %d snippet: %s", idx, body[:120].replace("\n", " "))
+        comment_debug: Optional[Dict[str, Any]] = None
+        if debug_entries is not None:
+            comment_debug = {
+                "comment_index": idx,
+                "comment_id": comment.get("id"),
+                "author": comment.get("author", "unknown"),
+                "source": source,
+                "thread_title": thread_title,
+                "permalink": f"{REDDIT_BASE}{comment.get('permalink', base_permalink)}",
+                "body": body,
+                "record": None,
+                "record_error": None,
+                "fields": None,
+                "included": False,
+                "skip_reason": None,
+            }
         try:
             record = parse_record(body)
         except Exception as exc:
             logger.error("Failed to parse record on comment %d: %s", idx, exc, exc_info=True)
+            if comment_debug is not None:
+                comment_debug["record_error"] = str(exc)
+                comment_debug["skip_reason"] = "record_parse_error"
+                debug_entries.append(comment_debug)
             continue
         if not record:
             logger.debug("No record found for comment %d", idx)
+            if comment_debug is not None:
+                comment_debug["skip_reason"] = "record_not_found"
+                debug_entries.append(comment_debug)
             continue
         logger.debug("Record parsed for comment %d: %s", idx, record)
         wins = record.wins
@@ -717,8 +742,14 @@ def collect_picks(
         if fields.get("pick") is None and fields.get("game"):
             logger.debug("No explicit pick found for comment %d; using game as bet", idx)
             fields["pick"] = fields["game"]
+        if comment_debug is not None:
+            comment_debug["record"] = asdict(record)
+            comment_debug["fields"] = dict(fields)
         if not any(value for key, value in fields.items() if key != "game"):
             logger.debug("Skipping comment %d due to missing pick fields", idx)
+            if comment_debug is not None:
+                comment_debug["skip_reason"] = "missing_pick_fields"
+                debug_entries.append(comment_debug)
             continue
         win_pct = compute_win_pct(wins, losses)
         adjusted_pct = compute_adjusted_pct(wins, losses)
@@ -745,6 +776,10 @@ def collect_picks(
         logger.debug(
             "Appended pick for comment %d: author=%s pick=%s", idx, comment.get("author", "unknown"), fields["pick"]
         )
+        if comment_debug is not None:
+            comment_debug["included"] = True
+            comment_debug["pick_entry"] = asdict(picks[-1])
+            debug_entries.append(comment_debug)
     picks.sort(
         key=lambda p: (
             p.adjusted_pct,
@@ -813,6 +848,27 @@ def write_output(picks: List[PickEntry], output: Path, title: str) -> None:
     output.write_text(to_html(picks, title), encoding="utf-8")
 
 
+def write_debug_output(
+    picks: List[PickEntry],
+    entries: List[Dict[str, Any]],
+    output: Path,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    included_comments = sum(1 for entry in entries if entry.get("included"))
+    payload: Dict[str, Any] = {
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "metadata": metadata or {},
+        "summary": {
+            "total_comments": len(entries),
+            "comments_with_picks": included_comments,
+        },
+        "picks": [asdict(pick) for pick in picks],
+        "comments": entries,
+    }
+    output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -846,6 +902,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Enable verbose logging output",
     )
+    parser.add_argument(
+        "--debug-output",
+        default=None,
+        help="Optional JSON file capturing comment parsing diagnostics",
+    )
     return parser.parse_args(argv)
 
 
@@ -871,6 +932,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     all_picks: List[PickEntry] = []
     thread_titles: List[str] = []
+    debug_entries: Optional[List[Dict[str, Any]]] = [] if args.debug_output else None
 
     if args.thread_url:
         post_id, permalink, subreddit = thread_from_url(args.thread_url)
@@ -893,6 +955,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             base_permalink=base_permalink,
             source=source_label,
             thread_title=thread_title,
+            debug_entries=debug_entries,
         )
         if picks:
             all_picks.extend(picks)
@@ -949,6 +1012,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 base_permalink=thread_data.get("permalink", "/"),
                 source=config.subreddit,
                 thread_title=thread_title,
+                debug_entries=debug_entries,
             )
             if picks:
                 all_picks.extend(picks)
@@ -972,6 +1036,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         reverse=True,
     )
 
+    total_picks_before_limit = len(all_picks)
     if args.limit:
         all_picks = all_picks[: args.limit]
 
@@ -985,6 +1050,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     write_output(all_picks, Path(args.output), report_title)
     logger.info("Wrote %d picks to %s with title %s", len(all_picks), args.output, report_title)
     print(f"Wrote {len(all_picks)} picks to {args.output}")
+
+    if debug_entries is not None and args.debug_output:
+        metadata = {
+            "report_title": report_title,
+            "limit": args.limit,
+            "subreddit_args": args.subreddits,
+            "thread_url": args.thread_url,
+            "base_url": args.base_url,
+            "total_picks_before_limit": total_picks_before_limit,
+            "total_picks_after_limit": len(all_picks),
+            "thread_titles": thread_titles,
+        }
+        write_debug_output(all_picks, debug_entries, Path(args.debug_output), metadata=metadata)
+        print(f"Wrote debug details for {len(debug_entries)} comments to {args.debug_output}")
     return 0
 
 

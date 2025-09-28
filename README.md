@@ -29,8 +29,11 @@ Key flags:
 - `--limit` – cap the number of picks in the generated report (default 10).
 - `--subreddit` – repeatable; accepts `name`, `name=Pick of the Day`, or a full query such as `name=title:"Best Bets"`. Defaults to `r/sportsbook`.
 - `--verbose` – print INFO-level logging (handy when monitoring long fetches).
+- `--debug-output` – write a JSON companion file with comment-level parsing diagnostics (useful for debugging parser logic).
 
 Outputs land in `output/top_picks.html` by default.
+
+When the debug flag is supplied, a second JSON file is written alongside the HTML report. It captures the raw comment text, record parsing results, extracted fields, and whether each comment produced a pick—perfect for sharing with an AI assistant when chasing parsing edge cases.
 
 ## Scheduling for 5 AM Eastern
 
