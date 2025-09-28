@@ -1254,7 +1254,7 @@ def collect_picks(
         if comment_debug is not None:
             comment_debug["record"] = asdict(record)
             comment_debug["fields"] = dict(fields)
-        required_keys = ("pick", "game", "sport", "time", "recommended_wager")
+        required_keys = ("pick", "game")
         missing_required = [key for key in required_keys if not fields.get(key)]
         if missing_required:
             logger.debug("Skipping comment %d due to missing required fields: %s", idx, missing_required)
