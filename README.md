@@ -35,20 +35,6 @@ Outputs land in `output/top_picks.html` by default.
 
 When the debug flag is supplied, a second JSON file is written alongside the HTML report. It captures the raw comment text, record parsing results, extracted fields, and whether each comment produced a pick—perfect for sharing with an AI assistant when chasing parsing edge cases.
 
-## Scheduling for 5 AM Eastern
-
-Cron does not understand time zones directly. Set the `TZ` variable to Eastern time and schedule for 5 AM:
-
-```cron
-TZ=America/New_York
-0 5 * * * /home/alan-delong/repos/sportsbook-picks/.venv/bin/python \
-  /home/alan-delong/repos/sportsbook-picks/src/pick_collector.py \
-  --output /home/alan-delong/repos/sportsbook-picks/output/top_picks.html \
-  --limit 20 >> /home/alan-delong/repos/sportsbook-picks/log.txt 2>&1
-```
-
-Adjust the paths if you place the repository elsewhere. The redirect keeps a rolling log of each run.
-
 ## Development Notes
 
 - The parser looks for lines that start with `Pick:`, `Sport:`, `Time:` and `Wager:` (case insensitive).
