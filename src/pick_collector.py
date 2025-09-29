@@ -419,6 +419,15 @@ def looks_like_plain_matchup(text: str) -> Optional[str]:
     if any(word in lowered for word in ("record", "analysis", "units", "odds", "stake", "roi", "notes")):
         return None
     if LIKELY_GAME_TEXT.search(candidate):
+        # Require "at" separators to connect two textual entities (avoid phrases like "at +100")
+        lowered = candidate.lower()
+        if " at " in lowered:
+            at_match = re.search(r"\bat\b", candidate, re.I)
+            if at_match:
+                before = candidate[: at_match.start()].strip()
+                after = candidate[at_match.end():].strip()
+                if not before or not after or not before[-1].isalpha() or not after[0].isalpha():
+                    return None
         return re.sub(r"\s+", " ", candidate)
     return None
 
@@ -918,6 +927,8 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             continue
         captured = False
         for key, patterns in FIELD_PATTERNS.items():
+            if key == "pick" and result["pick"] and pick_line_index is not None and idx > pick_line_index:
+                continue
             if key != "pick" and result[key]:
                 continue
             for pattern in patterns:
@@ -931,7 +942,8 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                     for ch in normalized_line
                     if not (0x2600 <= ord(ch) <= 0x27FF or 0x1F300 <= ord(ch) <= 0x1FAFF)
                 )
-                match = pattern.match(normalized_line)
+                sanitized_line = normalized_line.replace("__", "").replace("**", "")
+                match = pattern.match(sanitized_line)
                 if match:
                     value = match.group(1).strip()
                     if not value:
