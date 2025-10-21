@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from textwrap import dedent
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -57,6 +58,203 @@ class ParseRecordTest(unittest.TestCase):
         self.assertEqual(record.pushes, 4)
         self.assertEqual(record.display, "25-8 (4 pushes)")
 
+
+class ParsingRegressionTest(unittest.TestCase):
+    def test_billycapezzi_reaves_pick_extracted(self) -> None:
+        body = dedent(
+            """\
+            POTD RECORD: 163-123
+
+            Season record: 0-0
+
+            Last POTD:
+
+            Todays POTD: __Austin Reaves O10.5 RA @2.0__ 1U (Bet365)
+
+            NBA | Lakers vs GSW | 🏀  
+
+            We’re so back fellas! Missed y’all let’s get into it - NBA opening night 🔥
+
+            First of all I’d like to say that this long wait has given me no chance of grabbing a good line without it getting bumped. Even Reaves was at 9.5 last night but I still like the 10.5 so I’m still going for it.
+
+            AR crushed this line in games without LeBron last season and it’s been confirmed for a while that Bron will miss the first few weeks of this season including the opener. Big upside for Reaves as seen by the numbers, he’s gone over this line in 8/9 games without LeBron, 9 straight on 9.5 last season avg 14.9 RA per game on 13.2 potential assists per game and 11.7 rebound chances per game.
+
+            The addition of big man Al Horford for Golden State Warriors will bring more threat from deep for them as his game includes a lot of threes and playing outside the perimeter. New Lakers center Ayton will be dragged out the paint to defend, which will leave lots of rebound chances for the others and as a Lakers fan I know that Reaves is always active to grab them. Self explanatory that the assist upside is there without Bron, as him and Luka will run the plays and both to have a fair share of the ball.
+
+            Like all his lines tomorrow but this one looks the best to me, expecting big big minutes from him in what should be a good game. 
+
+            _RA stands for Rebounds + Assists combined, individual split if you don’t have it would be 5.5 assists imo_
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "Lakers vs GSW")
+        self.assertEqual(fields["pick"], "Austin Reaves O10.5 RA @2.0")
+        self.assertEqual(fields["recommended_wager"], "1U")
+
+    def test_stakesniper_roi_not_selected(self) -> None:
+        body = dedent(
+            """\
+            Record 26 - 24
+
+            ROI +0.52%
+
+            ✅✅❌❌✅✅❌✅❌❌✅❌❌❌❌❌✅✅✅❌✅❌✅✅❌❌✅✅❌✅❌❌✅✅❌✅❌✅❌✅✅✅✅❌❌❌✅❌✅✅
+
+            LAST PICK: Tottenham vs Aston Villa
+
+            ⚽ Pick: Both teams to score 
+
+            💸 Odds: 1.75
+
+            📊 My 50th tip came in nicely ❤️ Bet was won on the 37th minute minute when Aston Villa equalised who then went on to win the game. Would have gotten better odds if I added over 2.5 goals to it but didn't trust that as was expecting a 1-1 draw. Great win nonetheless!
+
+            TODAY'S PICK: Champions League Football ⚽ - Villarreal vs Manchester City (21:00 CET)
+
+            ⚽ Pick: Both teams to score 
+
+            💸 Odds: 1.66
+
+            📊 City’s away games in Europe have consistently produced goals on both sides recently, while Villarreal have a potent attack but also defensive frailties making BTTS highly probable. Villarreal have been strong at home, not losing yet and scoring in all games and have only lost 1 game in all 2025 against Real Madrid.
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "Villarreal vs Manchester City")
+        self.assertEqual(fields["pick"], "Both teams to score")
+
+    def test_geluksspook24_match_line_retained(self) -> None:
+        body = dedent(
+            """\
+            Record: 5-8 ✅✅❌✅️✅️❌❌❌❌✅️❌❌❌
+
+            Profit: -2.96 units
+
+            Last pick: (Alaves - Valencia) Abde Rebbach over 0.5 shots on target (3.00) ❌
+
+            ------------------------------------------------------------
+
+            Competition: UEFA Champions League
+
+            Match: PSV - Napoli
+
+            Start time: 3pm EST / 21.00 CET
+
+            Pick: **Frank Anguissa over 0.5 shots on target (bookmaker Unibet, odds 2.85)**
+
+            Units: 1
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "PSV - Napoli")
+        self.assertEqual(
+            fields["pick"],
+            "Frank Anguissa over 0.5 shots on target (bookmaker Unibet, odds 2.85)",
+        )
+        self.assertEqual(fields["recommended_wager"], "1")
+
+    def test_olivecritical_pick_preferred(self) -> None:
+        body = dedent(
+            """\
+            Record:
+
+            ❌❌✅✅✅✅✅
+
+            **Event:** ⚽ / UEFA Champions League / Copenhagen v Dortmund
+
+            **Net Units/ROI:** 6.88u/38.22%
+
+            **Previous Pick:** *Double chance: Mjällby or draw & Over 0,5 goals @ 1,57 -- 2 units.*✅
+
+            **Summary:** The Swedish Leicester City made it happen! After a quick 0-2 lead after 28 minutes they didn't give anything away to become champions. Which is also good as it meant this bet hit. GG's
+
+            **Today's Pick:** ***Dortmund over 1.5 goals @ 1.83 -- 4 units.***
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "Copenhagen v Dortmund")
+        self.assertEqual(fields["pick"], "Dortmund over 1.5 goals @ 1.83")
+        self.assertEqual(fields["recommended_wager"], "4 units")
+
+    def test_vander_chill_comment_is_skipped(self) -> None:
+        body = "At 43-22 you are still better than most... a few losses is just mean reversion.  I like both picks... welcome back!"
+        fields = extract_pick_fields(body.splitlines())
+        self.assertIsNone(fields["pick"])
+        self.assertIsNone(fields["game"])
+
+    def test_frozenstride_followup_pick_used(self) -> None:
+        body = dedent(
+            """\
+            **Record:** 2-2 *(+0.3)*
+
+            **Todays Bet:** Union Saint Gilloise - Inter 
+            **Inter WIN**
+
+            **Odds:** $1.75
+
+            **Wager:** 2 units 
+
+            **When:** 11 hours from post
+
+            **Why:** 
+
+            Inter Milan should stroll into Brussels with all the quiet confidence of a team that’s been here and done it a hundred times before, because, they basically have. Union Saint Gilloise are a tidy outfit with plenty of heart sure, but they’re about to find out that Serie A’s best don’t do charity work. Even with Marcus Thuram sidelined, Inter have too much quality all over the pitch. 
+
+            Lautaro Martinez is scoring like a well oiled scoring machine, and Barella’s engine never wants to stop. Union might try to press high and ride the home crowd energy, but once Inter settle in and start warming up and passing it around, it should put a stop to the noise of the fans. Expect a professional, nononsense display from Inter, think less chaos, more cold efficiency. A comfortable 2-0 or 3-1 Inter win feels about right.
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "Union Saint Gilloise - Inter")
+        self.assertEqual(fields["pick"], "Inter WIN")
+        self.assertEqual(fields["recommended_wager"], "2 units")
+
+    def test_the_kendawg_pick_not_overwritten(self) -> None:
+        body = dedent(
+            """\
+            🎯 **Pick: Manchester City –1.5 AH**
+
+            Event: UEFA Champions League 
+
+            Odds: 2.75 (Bet365) 
+
+            Model Fair: 2.3
+
+            Stake: $100 (2 Units) 
+
+            Record: 2-2
+
+            Poisson/Elo Model interpretation: 
+
+            expected goals:
+
+            λ City ≈ 1.90  λ Villarreal ≈ 0.8
+
+            From simulated score distributions, City win by 2+ ≈ 43 % of the time
+
+            Fair odds = 1 / 0.43 ≈ 2.33
+
+            Book price = 2.75 +EV (~+18 %).
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["pick"], "Manchester City -1.5 AH @ 2.75 (Bet365)")
+        self.assertEqual(fields["recommended_wager"], "2 Units")
+
+    def test_reptilia_pick_trailing_bar_removed(self) -> None:
+        body = "POTD: Kecmanovic vs Wawrinka | Pick: Kecmanovic ML (-175) | Units: 4u"
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "Kecmanovic vs Wawrinka")
+        self.assertEqual(fields["pick"], "Kecmanovic ML (-175)")
+        self.assertEqual(fields["recommended_wager"], "4u")
+
+    def test_successful_wall_split_game_and_bet(self) -> None:
+        body = dedent(
+            """\
+            POTD: Ipswich Town vs Charlton Athletic ( Ipswich ML + O1.5 Goals ) @-102 2u
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "Ipswich Town vs Charlton Athletic")
+        self.assertEqual(fields["pick"], "ML + O1.5 Goals @-102")
+        self.assertEqual(fields["recommended_wager"], "2u")
 
 if __name__ == "__main__":
     unittest.main()

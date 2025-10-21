@@ -239,6 +239,7 @@ def _normalize_ascii(text: str) -> str:
     if not text:
         return ""
     normalized = unicodedata.normalize("NFKD", text)
+    normalized = normalized.replace("–", "-").replace("—", "-").replace("−", "-")
     return normalized.encode("ascii", "ignore").decode("ascii")
 
 
@@ -485,11 +486,17 @@ def peel_trailing_stake(detail: str) -> Tuple[str, Optional[str]]:
     if paren_stake:
         return detail, paren_stake
     stripped = detail.rstrip()
-    match = TRAILING_STAKE.search(stripped)
+    stripped_for_match = stripped.rstrip(".! ")
+    match = TRAILING_STAKE.search(stripped_for_match)
     if not match:
-        return detail, None
-    stake = stripped[match.start() :].strip(" ,;-")
-    trimmed = stripped[: match.start()].rstrip(" ,;-")
+        alt_match = re.search(r"(\d+(?:\.\d+)?\s*(?:u|units?|unit))\s*\([^)]*\)\s*$", stripped, re.I)
+        if not alt_match:
+            return detail, None
+        stake = alt_match.group(1)
+        trimmed = stripped[: alt_match.start()].rstrip(" ,;-")
+        return trimmed, _clean_stake_text(stake)
+    stake = stripped_for_match[match.start() :].strip(" ,;-")
+    trimmed = stripped_for_match[: match.start()].rstrip(" ,;-")
     return trimmed, _clean_stake_text(stake)
 
 
@@ -500,6 +507,12 @@ def _clean_stake_text(stake: Optional[str]) -> Optional[str]:
     cleaned = cleaned.lstrip("= ")
     # Remove trailing stake separators that sneak in from prefixes like "1u -"
     cleaned = cleaned.rstrip("-: ")
+    paren_units = re.search(r"\(([^)]*?\b\d+(?:\.\d+)?\s*(?:u|units?|unit)\b[^)]*)\)\s*$", cleaned, re.I)
+    if paren_units:
+        inner = paren_units.group(1)
+        inner_cleaned = _clean_stake_text(inner)
+        if inner_cleaned:
+            return inner_cleaned
     cleaned = re.sub(r"\s*\([^)]*\)\s*$", "", cleaned).strip()
     return cleaned or None
 
@@ -525,6 +538,10 @@ def looks_like_plain_matchup(text: str) -> Optional[str]:
     if candidate.count(".") >= 2:
         return None
     lowered = candidate.lower()
+    if lowered.startswith("at ") and len(candidate) > 3 and not candidate[3].isalpha():
+        return None
+    if "at least" in lowered or "at most" in lowered:
+        return None
     normalized_prefix = candidate.lstrip("_*•-> \t").lower()
     if normalized_prefix.startswith("week "):
         return None
@@ -537,9 +554,9 @@ def looks_like_plain_matchup(text: str) -> Optional[str]:
         return None
     if candidate.endswith(":"):
         return None
-    if LIKELY_GAME_TEXT.search(candidate):
+    match = LIKELY_GAME_TEXT.search(candidate)
+    if match:
         # Require "at" separators to connect two textual entities (avoid phrases like "at +100")
-        lowered = candidate.lower()
         if " at " in lowered:
             at_match = re.search(r"\bat\b", candidate, re.I)
             if at_match:
@@ -547,7 +564,22 @@ def looks_like_plain_matchup(text: str) -> Optional[str]:
                 after = candidate[at_match.end():].strip()
                 if not before or not after or not before[-1].isalpha() or not after[0].isalpha():
                     return None
+                after_word = after.split(None, 1)[0].lower() if after.split() else ""
+                if after_word in {"least", "most", "risk", "stake"}:
+                    return None
+        if match.group(0) == "@":
+            after = candidate[match.end() :].lstrip()
+            if not after or not after[0].isalpha():
+                return None
+        if match.group(0).strip().lower() == "at":
+            after = candidate[match.end() :].strip()
+            if after and after[0].isdigit():
+                return None
         return re.sub(r"\s+", " ", candidate)
+    if " - " in candidate:
+        left, right = candidate.split(" - ", 1)
+        if len(left.strip().split()) > 8 or len(right.strip().split()) > 8:
+            return None
     if re.search(r"[A-Za-z].+\s-\s[A-Za-z]", candidate):
         return re.sub(r"\s+", " ", candidate)
     return None
@@ -622,6 +654,8 @@ def split_game_and_detail(text: str) -> Tuple[Optional[str], Optional[str]]:
             if matchup:
                 return matchup, detail_clean
             if LIKELY_GAME_TEXT.search(normalized):
+                return normalized, detail_clean
+            if detail_clean and detail_clean.strip().startswith(("-", "+")) and any(ch.isalpha() for ch in normalized):
                 return normalized, detail_clean
         fallback_detail = text.strip() or None
         if detail_clean and not fallback_detail:
@@ -795,12 +829,51 @@ def _is_field_line(line: str) -> bool:
 def _strip_pick_value_prefix(value: str) -> str:
     trimmed = _normalize_ascii(value).strip()
     trimmed = re.sub(
-        r"^(?:of\s+the\s+day|today'?s\s+pick|today'?s\s+play|todays\s+pick|todays\s+play|potd|pick|play|bet)\b[:\-\u2013\u2014|\s]*",
+        r"^(?:of\s+the\s+day|today'?s\s+picks?|today'?s\s+play|todays\s+picks?|todays\s+play|today'?s\s+bet|todays\s+bet|todays\s+fixtures|potd|picks?|play|bet|match|event)\b[:\-\u2013\u2014|\s]*",
         "",
         trimmed,
         flags=re.I,
     )
     return trimmed.strip()
+
+
+def _clean_odds_value(value: str) -> Optional[str]:
+    cleaned = _normalize_ascii(value).strip()
+    cleaned = re.sub(r"^(?:of|at|=)\s+", "", cleaned, flags=re.I)
+    match = re.search(r"[-+@]?\s*\d+(?:\.\d+)?(?:\s*\([^)]+\))?", cleaned)
+    if match:
+        odds = cleaned[match.start() : match.end()].strip()
+        return odds or None
+    return cleaned if cleaned and len(cleaned) <= 20 else None
+
+
+def _find_first_matchup(lines: Iterable[str]) -> Optional[str]:
+    for raw_line in lines:
+        normalized_line = _normalize_ascii(raw_line).replace("**", "").replace("__", "").strip()
+        if not normalized_line:
+            continue
+        lowered = normalized_line.lower()
+        if lowered.startswith(
+            (
+                "last pick",
+                "previous pick",
+                "record",
+                "profit",
+                "summary",
+                "odds",
+                "units",
+                "stake",
+                "write up",
+                "write-up",
+                "writeup",
+            )
+        ):
+            continue
+        candidate = _strip_pick_value_prefix(normalized_line)
+        matchup = looks_like_plain_matchup(candidate) or looks_like_plain_matchup(normalized_line)
+        if matchup:
+            return matchup
+    return None
 
 
 BET_DETAIL_KEYWORDS = (
@@ -843,13 +916,29 @@ def _looks_like_bet_detail(text: str) -> bool:
         return False
     if len(candidate) > 140:
         return False
-    lowered = f" {candidate.lower()} "
+    lowered_flat = candidate.lower()
+    if " roi" in lowered_flat or lowered_flat.startswith("roi"):
+        return False
+    if "return on investment" in lowered_flat:
+        return False
+    if "net unit" in lowered_flat or "net units" in lowered_flat:
+        return False
+    if "season record" in lowered_flat or "current record" in lowered_flat:
+        return False
+    if "record" in lowered_flat and not LIKELY_GAME_TEXT.search(candidate):
+        return False
+    if re.search(r"\b\d{1,3}-\d{1,3}\b", candidate) and not LIKELY_GAME_TEXT.search(candidate):
+        return False
+    lowered = f" {lowered_flat} "
+    tokens_hit = [token for token in BET_DETAIL_KEYWORDS if token in lowered]
     if looks_like_plain_matchup(candidate):
-        if not any(token in lowered for token in BET_DETAIL_KEYWORDS):
+        if not tokens_hit:
+            return False
+        if set(tokens_hit) == {" -"} and not re.search(r"\d", candidate):
             return False
     if looks_like_sport_line(candidate):
         return False
-    if any(token in lowered for token in BET_DETAIL_KEYWORDS):
+    if tokens_hit:
         return True
     if re.search(r"[+-]\s*\d", candidate):
         return True
@@ -862,6 +951,10 @@ def _looks_like_bet_detail(text: str) -> bool:
         return True
     if re.search(r"\b\d+(?:\.\d+)?\s*(?:to\s+win|parlay|leg|alt\s+line)\b", lowered):
         return True
+    if " win" in lowered_flat and len(candidate.split()) <= 4:
+        return True
+    if re.search(r"\d", lowered_flat):
+        return False
     return False
 
 
@@ -986,6 +1079,137 @@ def _find_followup_bet(
     return None
 
 
+PICK_HEADER_RE = re.compile(
+    r"^\s*[*_>\-•\u2022]*\s*(?:(?:today'?s|todays)\s+)?(?:potd|picks?|bet|play|selection)\b[:\-\u2013\u2014|]?\s*(?P<value>.*)$",
+    re.I,
+)
+
+
+def _is_reasonable_pick_text(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    normalized = _normalize_ascii(value).lower()
+    keywords = (
+        " over ",
+        " under ",
+        " moneyline",
+        " ml",
+        " to win",
+        " to score",
+        " btts",
+        " both teams",
+        " draw",
+        " double chance",
+        " spread",
+        " handicap",
+        " total",
+        " asian",
+        " alt",
+        " cards",
+        " corners",
+        " sog",
+        " shots",
+        " assists",
+        " rebounds",
+        " points",
+        " goals",
+        " win",
+        " parlay",
+        " team total",
+    )
+    if any(keyword in normalized for keyword in keywords):
+        return True
+    if re.search(r"\b\d{1,3}-\d{1,3}\b", normalized) and "@" not in normalized:
+        return False
+    if "@" in normalized or re.search(r"[+-]\s*\d", normalized):
+        return True
+    if re.search(r"\d", normalized):
+        return False
+    return False
+
+
+def _extract_pick_from_headers(lines: List[str]) -> Optional[Dict[str, Any]]:
+    best: Optional[Dict[str, Any]] = None
+    last_header_game: Optional[str] = None
+    for idx, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        ascii_line = _normalize_ascii(stripped)
+        lowered = ascii_line.lower().lstrip("_*•-> \t")
+        if lowered.startswith(
+            (
+                "last pick",
+                "previous pick",
+                "prior pick",
+                "last potd",
+                "previous potd",
+                "last bet",
+                "previous bet",
+                "last play",
+                "previous play",
+            )
+        ):
+            continue
+        match = PICK_HEADER_RE.match(ascii_line)
+        if not match:
+            continue
+        value = match.group("value") or ""
+        value = _strip_pick_value_prefix(value).strip()
+        header_game_candidate = None
+        if value:
+            header_game_candidate = _extract_matchup_from_text(value) or looks_like_plain_matchup(value)
+            if header_game_candidate:
+                header_game_candidate = header_game_candidate.strip()
+                last_header_game = header_game_candidate
+        game_candidate: Optional[str] = None
+        if value:
+            matchup_candidate = looks_like_plain_matchup(value)
+            if matchup_candidate and not re.search(r"\d", value) and not _looks_like_bet_detail(value):
+                game_candidate = matchup_candidate
+                followup = _find_followup_bet(lines, idx + 1)
+                value = followup or value
+            elif " - " in value and not value.strip().startswith(("-", "+")):
+                left, right = value.split(" - ", 1)
+                left_matchup = looks_like_plain_matchup(left)
+                if left_matchup:
+                    game_candidate = game_candidate or left_matchup
+                    value = right.strip()
+        if not value:
+            value = _find_followup_bet(lines, idx + 1)
+        if not value:
+            continue
+        cleaned_value = value.strip()
+        lowered_cleaned = cleaned_value.lower()
+        if lowered_cleaned.startswith(("record", "last pick", "todays fixtures", "today's fixtures")):
+            continue
+        game, detail, stake = parse_pick_text(cleaned_value)
+        pick_text = detail.strip() if detail else cleaned_value.strip()
+        if game:
+            normalized_game = looks_like_plain_matchup(game) or game
+            if normalized_game:
+                if not game_candidate or len(normalized_game) > len(game_candidate):
+                    game_candidate = normalized_game
+                if pick_text.startswith(("+", "-")) and normalized_game:
+                    pick_text = f"{normalized_game} {pick_text}".strip()
+                elif detail and "+" not in detail and pick_text.lower().startswith(normalized_game.lower()):
+                    remainder = pick_text[len(normalized_game) :].lstrip(" -,:@")
+                    if remainder:
+                        pick_text = remainder
+        candidate: Dict[str, Any] = {"pick": pick_text.strip(), "index": idx}
+        chosen_game = game_candidate or header_game_candidate or last_header_game
+        if chosen_game:
+            cleaned_game = chosen_game.strip()
+            normalized_candidate_game = looks_like_plain_matchup(cleaned_game)
+            if normalized_candidate_game:
+                candidate["game"] = normalized_candidate_game
+        if stake:
+            candidate["stake"] = stake
+        if best is None or idx >= best.get("index", -1):
+            best = candidate
+    return best
+
+
 def _sport_token_from_text(text: str) -> Optional[str]:
     text = _normalize_ascii(text)
     if "/" in text:
@@ -1089,6 +1313,7 @@ def _normalize_game_text(game: str) -> Tuple[Optional[str], Optional[str]]:
                 sport_candidate = candidate
                 cleaned = remainder.strip()
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -|\t")
+    cleaned = re.sub(r"\b(pick|play)\b\s*$", "", cleaned, flags=re.I)
     if sport_from_bracket:
         if not sport_candidate or sport_candidate.lower() in {"soccer", "football"}:
             sport_candidate = sport_from_bracket
@@ -1109,6 +1334,11 @@ def _clean_time_value(value: str) -> str:
 def _cleanup_pick_detail(detail: str) -> str:
     trimmed = detail.strip()
     trimmed = re.sub(r"[,;\-\s]*(?:for|risk)\s*$", "", trimmed, flags=re.I)
+    trimmed = trimmed.rstrip("| ")
+    trimmed = re.sub(r"\s*\(price\s*=.*$", "", trimmed, flags=re.I)
+    while trimmed.count(")") > trimmed.count("("):
+        trimmed = trimmed[::-1].replace(")", "", 1)[::-1]
+    trimmed = re.sub(r"\s+", " ", trimmed)
     return trimmed.strip(" ,;-")
 
 
@@ -1126,6 +1356,14 @@ def _next_non_empty(lines: List[str], start_index: int, skip_field_lines: bool =
 
 def extract_pick_fields(lines: Iterable[str]) -> dict:
     material = list(lines)
+    expanded: List[str] = []
+    for raw_line in material:
+        if "|" in raw_line and not raw_line.strip().startswith("|"):
+            segments = [segment.strip() for segment in raw_line.split("|") if segment.strip()]
+            expanded.extend(segments)
+        else:
+            expanded.append(raw_line)
+    material = expanded
     result = {
         "pick": None,
         "game": None,
@@ -1147,6 +1385,8 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         lowered = stripped.lower()
         ascii_lowered = ascii_line.lower()
         normalized_lowered = ascii_lowered.lstrip("_*•-> \t")
+        if normalized_lowered.startswith(("write up", "write-up", "writeup")):
+            continue
         if normalized_lowered.startswith(
             (
                 "last pick",
@@ -1185,6 +1425,21 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             in_previous_pick_block = False
         if normalized_lowered.startswith(("units won", "profit/loss", "profit loss", "profit", "loss")):
             continue
+        if normalized_lowered.startswith(
+            (
+                "roi",
+                "return on investment",
+                "net units",
+                "net unit",
+                "net profit",
+                "net roi",
+                "expected goals",
+                "model fair",
+                "poisson",
+                "lambda",
+            )
+        ):
+            continue
         if looks_like_record_heading(stripped):
             continue
         if in_previous_pick_block:
@@ -1192,7 +1447,21 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         captured = False
         for key, patterns in FIELD_PATTERNS.items():
             if key == "pick" and result["pick"] and pick_line_index is not None and idx > pick_line_index:
-                continue
+                if not normalized_lowered.startswith(
+                    (
+                        "pick",
+                        "today's pick",
+                        "todays pick",
+                        "today's bet",
+                        "todays bet",
+                        "today's play",
+                        "todays play",
+                        "potd",
+                        "bet",
+                        "play",
+                    )
+                ):
+                    continue
             if key == "recommended_wager" and any(
                 token in normalized_lowered for token in ("net", "record", "units won", "balance")
             ):
@@ -1223,6 +1492,40 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                         if "👉" in line:
                             continue
                         value = _strip_pick_value_prefix(value)
+                        value = value.strip()
+                        matchup_candidate = looks_like_plain_matchup(value) if value else None
+                        if matchup_candidate:
+                            value_lower = value.lower()
+                            has_digits = bool(re.search(r"\d", value))
+                            has_odds_marker = "@" in value_lower or re.search(r"[+-]\s*\d", value)
+                            keyword_hits = (
+                                " over " in value_lower
+                                or " under " in value_lower
+                                or " moneyline" in value_lower
+                                or " ml" in value_lower
+                                or " spread" in value_lower
+                                or " handicap" in value_lower
+                                or " to win" in value_lower
+                                or " to score" in value_lower
+                                or " total" in value_lower
+                                or " cards" in value_lower
+                                or " corners" in value_lower
+                                or " btts" in value_lower
+                                or " both teams" in value_lower
+                                or " goals" in value_lower
+                                or " shots" in value_lower
+                                or " assists" in value_lower
+                                or " rebounds" in value_lower
+                                or " points" in value_lower
+                                or " draw no bet" in value_lower
+                            )
+                            if not has_digits and not has_odds_marker and not keyword_hits:
+                                existing_game = result.get("game")
+                                if not existing_game or _should_replace_game(existing_game, matchup_candidate):
+                                    result["game"] = matchup_candidate
+                                    game_line_index = idx
+                                followup = _find_followup_bet(material, idx + 1)
+                                value = (followup or "").strip()
                         if not value:
                             value = _find_followup_bet(material, idx + 1) or ""
                         elif not _looks_like_bet_detail(value):
@@ -1319,7 +1622,12 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             candidate_pick_ascii = ascii_candidate.strip()
             candidate_pick_ascii = _strip_pick_value_prefix(candidate_pick_ascii)
             lowered_candidate_pick = candidate_pick_ascii.lower()
-            if lowered_candidate_pick.startswith(("unit", "record", "profit", "net", "form")):
+            if (
+                lowered_candidate_pick.startswith(("unit", "record", "profit", "net", "form", "roi"))
+                or "roi" in lowered_candidate_pick
+                or "net unit" in lowered_candidate_pick
+                or "net profit" in lowered_candidate_pick
+            ):
                 candidate_pick_ascii = ""
             if candidate_pick_ascii and _looks_like_bet_detail(candidate_pick_ascii):
                 result["pick"] = candidate_pick_ascii
@@ -1348,7 +1656,11 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             elif game_line_index is not None and idx > game_line_index and (idx - game_line_index) <= 3:
                 needs_game = True
         if needs_game:
-            matchup = looks_like_plain_matchup(stripped)
+            lowered_stripped = stripped.lower()
+            if lowered_stripped.startswith("at ") or lowered_stripped.startswith("last pick"):
+                continue
+            candidate_game_line = _strip_pick_value_prefix(stripped)
+            matchup = looks_like_plain_matchup(candidate_game_line) or looks_like_plain_matchup(stripped)
             if matchup:
                 result["game"] = matchup
                 game_line_index = idx
@@ -1389,9 +1701,52 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                     if value:
                         if key == "recommended_wager":
                             aux[key] = _clean_stake_text(value) or value
+                        elif key == "odds":
+                            cleaned_odds = _clean_odds_value(value)
+                            if cleaned_odds:
+                                aux[key] = cleaned_odds
                         else:
                             aux[key] = value
                     break
+
+    best_pick_candidate = _extract_pick_from_headers(material)
+    if best_pick_candidate:
+        candidate_pick = best_pick_candidate.get("pick")
+        if candidate_pick:
+            existing_pick = result.get("pick")
+            candidate_is_valid = _is_reasonable_pick_text(candidate_pick)
+            replace = False
+            if not _is_reasonable_pick_text(existing_pick):
+                replace = True
+            elif candidate_is_valid and best_pick_candidate.get("index", -1) >= (pick_line_index or -1):
+                replace = True
+            if replace:
+                result["pick"] = candidate_pick
+                pick_line_index = best_pick_candidate.get("index", pick_line_index)
+                candidate_game = best_pick_candidate.get("game")
+                if candidate_game:
+                    existing_game = result.get("game")
+                    if not existing_game or _should_replace_game(existing_game, candidate_game):
+                        result["game"] = candidate_game
+                candidate_stake = best_pick_candidate.get("stake")
+                if candidate_stake and not result.get("recommended_wager"):
+                    result["recommended_wager"] = candidate_stake
+
+    if not result.get("game"):
+        for raw_line in material:
+            stripped_line = raw_line.strip()
+            if not stripped_line:
+                continue
+            ascii_line = _normalize_ascii(stripped_line)
+            lowered_line = ascii_line.lower()
+            if lowered_line.startswith("match:") or lowered_line.startswith("event:") or lowered_line.startswith("game:"):
+                _, _, remainder = ascii_line.partition(":")
+                candidate_game = remainder.strip()
+                if candidate_game:
+                    normalized_candidate = looks_like_plain_matchup(candidate_game) or candidate_game
+                    if normalized_candidate:
+                        result["game"] = normalized_candidate.strip()
+                        break
 
     if result["pick"]:
         original_pick = result["pick"].strip()
@@ -1416,9 +1771,11 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                 lowered_detail = cleaned_detail.lower()
                 lowered_game = normalized_game.lower()
                 if lowered_detail.startswith(lowered_game):
-                    trimmed = cleaned_detail[len(normalized_game) :].lstrip(" ,;-@")
-                    if trimmed:
-                        cleaned_detail = trimmed
+                    remainder = cleaned_detail[len(normalized_game) :].lstrip()
+                    if remainder and remainder[0] not in "-+":
+                        trimmed = remainder.lstrip(" ,;-@")
+                        if trimmed:
+                            cleaned_detail = trimmed
         if cleaned_detail:
             if normalized_game and normalized_game.lower() not in cleaned_detail.lower():
                 simple_game = normalized_game.lower()
@@ -1490,6 +1847,8 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                         else None
                     )
                     game_text = game_text[: match.start()].rstrip(" ,;-@/\t")
+            elif game_text and "(" in game_text and ")" not in game_text:
+                game_text = game_text.split("(", 1)[0].rstrip(" ,;-@/\t")
             if game_text and LIKELY_GAME_TEXT.search(game_text):
                 extracted_game = _extract_matchup_from_text(game_text)
                 if extracted_game:
@@ -1522,16 +1881,49 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             elif len(sport_hint) <= 30:
                 result["sport"] = sport_hint
 
-    odds = aux.get("odds")
-    if result["pick"] and odds and odds.lower() not in result["pick"].lower():
-        result["pick"] = f"{result['pick']} @ {odds}"
-    book = aux.get("book")
-    if result["pick"] and book and book.lower() not in result["pick"].lower():
-        result["pick"] = f"{result['pick']} ({book})"
     if result["sport"] and "potd" in result["sport"].lower():
         result["sport"] = None
     if result["pick"] and result["sport"] and result["pick"].strip().lower() == result["sport"].strip().lower():
         result["pick"] = None
+
+    if result.get("pick") and not _is_reasonable_pick_text(result["pick"]):
+        result["pick"] = None
+    if result.get("game"):
+        game_text = str(result["game"])
+        lowered_game = game_text.lower()
+        has_matchup_marker = LIKELY_GAME_TEXT.search(game_text) or re.search(r"\bvs\b|\b@\b|\bv\b", lowered_game)
+        if lowered_game.startswith("at ") and not re.search(r"\bat\s+[A-Za-z]", lowered_game):
+            result["game"] = None
+        elif not has_matchup_marker:
+            result["game"] = None
+
+    if not result.get("game"):
+        alt_game = _find_first_matchup(material)
+        if alt_game:
+            result["game"] = alt_game
+
+    canonical_pick = best_pick_candidate.get("pick") if best_pick_candidate else None
+    final_pick = canonical_pick or result.get("pick")
+    if final_pick:
+        final_pick = _cleanup_pick_detail(final_pick)
+        odds_suffix = aux.get("odds")
+        if odds_suffix and len(odds_suffix) <= 30 and odds_suffix.lower() not in final_pick.lower():
+            final_pick = f"{final_pick} @ {odds_suffix}"
+        book_suffix = aux.get("book")
+        if book_suffix and len(book_suffix) <= 30 and book_suffix.lower() not in final_pick.lower():
+            final_pick = f"{final_pick} ({book_suffix})"
+        result["pick"] = _cleanup_pick_detail(final_pick)
+
+    if result.get("game"):
+        normalized_game = looks_like_plain_matchup(result["game"])
+        if normalized_game:
+            result["game"] = normalized_game
+        elif not LIKELY_GAME_TEXT.search(result["game"]):
+            result["game"] = None
+    if not result.get("game"):
+        alt_game = _find_first_matchup(material)
+        if alt_game:
+            result["game"] = alt_game
 
     if result["pick"] and not result.get("recommended_wager"):
         trimmed_pick, stake_from_pick = peel_trailing_stake(result["pick"])
