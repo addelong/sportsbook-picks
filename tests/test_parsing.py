@@ -151,6 +151,40 @@ class ParsingRegressionTest(unittest.TestCase):
         )
         self.assertEqual(fields["recommended_wager"], "1")
 
+    def test_fuzzy_recognition_time_line_ignored(self) -> None:
+        body = dedent(
+            """\
+            Record 5-1 LWWWWW (Will update record)
+
+            Last Pick : NBA Rockets vs Thunder (07:40 ET)
+            Reed Sheppard under 8.5 points (1.85) (bet365)
+
+            Todays Pick : NBA Grizzlies vs Pelicans (08:00 ET)
+            Grizzlies -4.5 (1.85) (bet365)
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "NBA Grizzlies vs Pelicans (08:00 ET)")
+        self.assertEqual(fields["pick"], "Grizzlies -4.5 (1.85) (bet365)")
+
+    def test_geluksspook24_bonus_tip_does_not_replace_game_or_sport(self) -> None:
+        body = dedent(
+            """\
+            Competition: UEFA Champions League
+
+            Match: Galatasaray - Bodo/Glimt
+
+            Pick: Jens Hauge over 0.5 shots on target (bookmaker Unibet, odds 2.25)
+
+            Units: 1
+
+            **BONUS TIP:** He scored 2 headers only five days ago vs Sarpsborg 08
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "Galatasaray - Bodo/Glimt")
+        self.assertEqual(fields["sport"], "Soccer")
+
     def test_olivecritical_pick_preferred(self) -> None:
         body = dedent(
             """\

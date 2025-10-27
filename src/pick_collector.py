@@ -249,6 +249,26 @@ def _should_replace_game(existing: Optional[str], candidate: Optional[str]) -> b
     candidate_clean = candidate.strip()
     if not candidate_clean:
         return False
+    lowered_candidate = candidate_clean.lower()
+    if lowered_candidate.startswith(
+        (
+            "he ",
+            "she ",
+            "i ",
+            "we ",
+            "they ",
+            "last ",
+            "record",
+            "profit",
+            "bonus",
+            "today ",
+            "todays ",
+            "write up",
+            "write-up",
+            "note ",
+        )
+    ):
+        return False
     if not existing or not existing.strip():
         return True
     existing_clean = existing.strip()
@@ -279,10 +299,25 @@ def _should_replace_game(existing: Optional[str], candidate: Optional[str]) -> b
 def _should_replace_sport(existing: Optional[str], candidate: Optional[str]) -> bool:
     if not candidate:
         return False
+    cleaned_candidate = _normalize_ascii(candidate).strip().lstrip("*_ ")
+    lowered_candidate = cleaned_candidate.lower()
+    if lowered_candidate.startswith(
+        (
+            "bonus",
+            "record",
+            "last pick",
+            "write up",
+            "write-up",
+            "today",
+            "todays",
+            "units",
+        )
+    ):
+        return False
     if not existing or not existing.strip():
         return True
     existing_clean = existing.strip().lower()
-    candidate_clean = candidate.strip().lower()
+    candidate_clean = cleaned_candidate.lower()
     if existing_clean == candidate_clean:
         return False
     low_quality = {"esports", "parlay", "unknown"}
@@ -870,6 +905,11 @@ def _find_first_matchup(lines: Iterable[str]) -> Optional[str]:
         ):
             continue
         candidate = _strip_pick_value_prefix(normalized_line)
+        lowered_candidate = candidate.lower()
+        if lowered_candidate.startswith(("he ", "she ", "i ", "we ", "they ", "last ")):
+            continue
+        if " scored" in lowered_candidate or " ago " in lowered_candidate:
+            continue
         matchup = looks_like_plain_matchup(candidate) or looks_like_plain_matchup(normalized_line)
         if matchup:
             return matchup
@@ -1169,6 +1209,11 @@ def _extract_pick_from_headers(lines: List[str]) -> Optional[Dict[str, Any]]:
                 game_candidate = matchup_candidate
                 followup = _find_followup_bet(lines, idx + 1)
                 value = followup or value
+            elif matchup_candidate and not _is_reasonable_pick_text(value):
+                game_candidate = matchup_candidate
+                followup = _find_followup_bet(lines, idx + 1)
+                if followup:
+                    value = followup
             elif " - " in value and not value.strip().startswith(("-", "+")):
                 left, right = value.split(" - ", 1)
                 left_matchup = looks_like_plain_matchup(left)
@@ -1351,6 +1396,37 @@ def _next_non_empty(lines: List[str], start_index: int, skip_field_lines: bool =
         if skip_field_lines and _is_field_line(candidate_line):
             continue
         return candidate
+    return None
+
+
+def _find_explicit_match_line(lines: Iterable[str]) -> Optional[str]:
+    for raw_line in lines:
+        ascii_line = _normalize_ascii(raw_line).strip()
+        if not ascii_line:
+            continue
+        lowered = ascii_line.lower()
+        if lowered.startswith(("match:", "game:", "event:")):
+            _, _, remainder = ascii_line.partition(":")
+            candidate = remainder.strip()
+            candidate = _strip_pick_value_prefix(candidate)
+            normalized = looks_like_plain_matchup(candidate) or candidate
+            if normalized:
+                return normalized
+    return None
+
+
+def _find_explicit_sport_line(lines: Iterable[str]) -> Optional[str]:
+    for raw_line in lines:
+        ascii_line = _normalize_ascii(raw_line).strip()
+        if not ascii_line:
+            continue
+        lowered = ascii_line.lower()
+        if lowered.startswith(("sport:", "competition:", "league:")):
+            _, _, remainder = ascii_line.partition(":")
+            candidate = remainder.strip()
+            cleaned = _sport_token_from_text(candidate) or candidate
+            if cleaned and not cleaned.lower().startswith("bonus"):
+                return cleaned
     return None
 
 
@@ -1669,13 +1745,13 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             sport_line = looks_like_sport_line(stripped)
             if sport_line:
                 lowered_sport_line = sport_line.lower()
-                if "potd" not in lowered_sport_line:
+                if "potd" not in lowered_sport_line and not lowered_sport_line.startswith("bonus tip"):
                     normalized_sport = _sport_token_from_text(sport_line) or sport_line
                     result["sport"] = normalized_sport
                     sport_line_index = idx
                     continue
             auto_sport = _sport_token_from_text(stripped)
-            if auto_sport and "potd" not in normalized_lowered:
+            if auto_sport and "potd" not in normalized_lowered and not normalized_lowered.startswith("bonus tip"):
                 result["sport"] = auto_sport
                 sport_line_index = idx
                 continue
@@ -1924,6 +2000,23 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         alt_game = _find_first_matchup(material)
         if alt_game:
             result["game"] = alt_game
+    if result.get("game"):
+        lowered_game = str(result["game"]).lower()
+        if lowered_game.startswith(("he ", "she ", "i ", "we ", "they ", "bonus", "record", "profit")):
+            explicit = _find_explicit_match_line(material)
+            if explicit:
+                result["game"] = explicit
+    if result.get("sport"):
+        normalized_sport_value = _normalize_ascii(str(result["sport"])).lstrip("*_ ")
+        lowered_sport = normalized_sport_value.lower()
+        if lowered_sport.startswith(("bonus", "record", "he ", "she ", "i ", "we ", "they ")):
+            explicit_sport = _find_explicit_sport_line(material)
+            if explicit_sport:
+                result["sport"] = explicit_sport
+    else:
+        explicit_sport = _find_explicit_sport_line(material)
+        if explicit_sport:
+            result["sport"] = explicit_sport
 
     if result["pick"] and not result.get("recommended_wager"):
         trimmed_pick, stake_from_pick = peel_trailing_stake(result["pick"])
