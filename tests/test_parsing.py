@@ -497,5 +497,58 @@ class ParsingRegressionTest(unittest.TestCase):
         self.assertIn("Ravens", fields["game"])
         self.assertIn("Packers", fields["game"])
 
+    def test_nba_team_name_detection(self) -> None:
+        body = dedent(
+            """\
+            **POTD Record:** 101-66-10
+            **Todays Pick:** New York Knicks vs Atlanta Hawks
+            **Pick:** Knicks -3.5 @ 1.90
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "NBA")
+        self.assertIn("Knicks", fields["game"])
+        self.assertIn("Hawks", fields["game"])
+
+    def test_nfl_team_name_detection(self) -> None:
+        body = dedent(
+            """\
+            **Record:** 15-8
+            **Pick:** Texans @ Chargers
+            **Bet:** Chargers -4 (-110)
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "NFL")
+        self.assertIn("Texans", fields["game"])
+        self.assertIn("Chargers", fields["game"])
+
+    def test_soccer_team_name_detection(self) -> None:
+        body = dedent(
+            """\
+            **Record:** 20-10
+            **Game:** Liverpool vs Wolves
+            **Pick:** Liverpool to win @ 1.50
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "Soccer")
+        self.assertIn("Liverpool", fields["game"])
+        self.assertIn("Wolves", fields["game"])
+
+    def test_slash_separated_sport_prefix(self) -> None:
+        body = dedent(
+            """\
+            **Record:** 25-15
+            **Previous:** NCAAB / UConn vs Villanova - WON
+            **Pick:** NCAAB / Stanford vs CSUN
+            **Bet:** Stanford -12.5
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "NCAAB")
+        self.assertIn("Stanford", fields["game"])
+        self.assertIn("CSUN", fields["game"])
+
 if __name__ == "__main__":
     unittest.main()

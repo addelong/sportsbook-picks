@@ -262,6 +262,52 @@ COMMON_SPORT_TOKENS = {
     "wnba",
 }
 
+# Team name to sport mapping for automatic sport detection
+TEAM_NAME_SPORTS = {
+    # NBA teams
+    "lakers": "NBA", "warriors": "NBA", "celtics": "NBA", "nets": "NBA",
+    "knicks": "NBA", "76ers": "NBA", "sixers": "NBA", "bulls": "NBA",
+    "heat": "NBA", "bucks": "NBA", "nuggets": "NBA", "clippers": "NBA",
+    "suns": "NBA", "mavericks": "NBA", "mavs": "NBA", "rockets": "NBA",
+    "spurs": "NBA", "thunder": "NBA", "jazz": "NBA", "blazers": "NBA",
+    "timberwolves": "NBA", "pelicans": "NBA", "grizzlies": "NBA", "kings": "NBA",
+    "hawks": "NBA", "hornets": "NBA", "wizards": "NBA", "pacers": "NBA",
+    "pistons": "NBA", "cavaliers": "NBA", "cavs": "NBA", "raptors": "NBA",
+    "magic": "NBA",
+
+    # NFL teams
+    "49ers": "NFL", "bears": "NFL", "bengals": "NFL", "bills": "NFL",
+    "broncos": "NFL", "browns": "NFL", "buccaneers": "NFL", "bucs": "NFL",
+    "cardinals": "NFL", "chargers": "NFL", "chiefs": "NFL", "colts": "NFL",
+    "cowboys": "NFL", "dolphins": "NFL", "eagles": "NFL", "falcons": "NFL",
+    "giants": "NFL", "jaguars": "NFL", "jets": "NFL", "lions": "NFL",
+    "packers": "NFL", "panthers": "NFL", "patriots": "NFL", "raiders": "NFL",
+    "rams": "NFL", "ravens": "NFL", "saints": "NFL", "seahawks": "NFL",
+    "steelers": "NFL", "texans": "NFL", "titans": "NFL", "vikings": "NFL",
+    "commanders": "NFL",
+
+    # English Premier League
+    "arsenal": "Soccer", "liverpool": "Soccer", "chelsea": "Soccer", "manchester": "Soccer",
+    "tottenham": "Soccer", "spurs": "Soccer", "villa": "Soccer", "wolves": "Soccer",
+    "brighton": "Soccer", "newcastle": "Soccer", "fulham": "Soccer", "brentford": "Soccer",
+    "everton": "Soccer", "leicester": "Soccer", "leeds": "Soccer", "southampton": "Soccer",
+    "burnley": "Soccer", "watford": "Soccer",
+
+    # Scottish Football
+    "hibernian": "Soccer", "hearts": "Soccer", "celtic": "Soccer", "rangers": "Soccer",
+}
+
+
+def _detect_sport_from_team_names(text: str) -> Optional[str]:
+    """Detect sport by looking for known team names in the text."""
+    if not text:
+        return None
+    lowered = text.lower()
+    for team_name, sport in TEAM_NAME_SPORTS.items():
+        if team_name in lowered:
+            return sport
+    return None
+
 
 def _normalize_ascii(text: str) -> str:
     if not text:
@@ -1665,6 +1711,15 @@ def _normalize_game_text(game: str) -> Tuple[Optional[str], Optional[str]]:
                 sport_candidate = candidate
                 cleaned = remainder.strip()
 
+    # Handle slash-separated sport prefixes like "NCAAB / TeamA vs TeamB"
+    if not sport_candidate and " / " in cleaned:
+        leading, remainder = cleaned.split(" / ", 1)
+        if not _has_matchup_hint(leading) and remainder:
+            candidate = _sport_token_from_text(leading.strip())
+            if candidate:
+                sport_candidate = candidate
+                cleaned = remainder.strip()
+
     # Handle dash-separated sport prefixes like "EPL – TeamA vs TeamB" or "NFL TeamA @ TeamB"
     if not sport_candidate:
         # Try splitting on various dash characters
@@ -1884,6 +1939,9 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         ):
             in_previous_pick_block = False
         if in_previous_pick_block and "|" in stripped:
+            in_previous_pick_block = False
+        # Also exit previous block if line looks like a game/matchup
+        if in_previous_pick_block and _has_matchup_hint(stripped):
             in_previous_pick_block = False
         if normalized_lowered.startswith(("units won", "profit/loss", "profit loss", "profit", "loss")):
             continue
@@ -2383,6 +2441,11 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         result["game"] = game_text
         if sport_from_game and _should_replace_sport(result.get("sport"), sport_from_game):
             result["sport"] = sport_from_game
+        # If still no sport, try detecting from team names in the game
+        if not result.get("sport") and result.get("game"):
+            team_sport = _detect_sport_from_team_names(result["game"])
+            if team_sport:
+                result["sport"] = team_sport
         if result["game"]:
             stripped_game = _strip_pick_value_prefix(str(result["game"]))
             if stripped_game and stripped_game != result["game"]:
