@@ -1534,13 +1534,17 @@ def _extract_pick_from_headers(lines: List[str]) -> Optional[Dict[str, Any]]:
         game, detail, stake = parse_pick_text(cleaned_value)
         pick_text = detail.strip() if detail else cleaned_value.strip()
         if not _looks_like_bet_detail(pick_text):
-            followup = _find_followup_bet(lines, idx + 1)
-            if followup:
-                pick_text = followup.strip()
-                if stake is None:
-                    _, _, stake_from_followup = parse_pick_text(followup)
-                    if stake_from_followup and not stake:
-                        stake = stake_from_followup
+            # Don't replace if this is already a reasonable complete pick
+            # _looks_like_bet_detail() returns False for matchups and many valid picks
+            # Only look for followup if the pick is incomplete or too short
+            if not _is_reasonable_pick_text(pick_text) or len(pick_text.strip()) < 15:
+                followup = _find_followup_bet(lines, idx + 1)
+                if followup:
+                    pick_text = followup.strip()
+                    if stake is None:
+                        _, _, stake_from_followup = parse_pick_text(followup)
+                        if stake_from_followup and not stake:
+                            stake = stake_from_followup
         if game:
             normalized_game = looks_like_plain_matchup(game) or game
             if normalized_game:
@@ -1940,9 +1944,6 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             in_previous_pick_block = False
         if in_previous_pick_block and "|" in stripped:
             in_previous_pick_block = False
-        # Also exit previous block if line looks like a game/matchup
-        if in_previous_pick_block and _has_matchup_hint(stripped):
-            in_previous_pick_block = False
         if normalized_lowered.startswith(("units won", "profit/loss", "profit loss", "profit", "loss")):
             continue
         if normalized_lowered.startswith(
@@ -2050,9 +2051,13 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                         if not value:
                             value = _find_followup_bet(material, idx + 1) or ""
                         elif not _looks_like_bet_detail(value):
-                            followup = _find_followup_bet(material, idx + 1)
-                            if followup:
-                                value = followup
+                            # Don't replace if this is already a reasonable complete pick
+                            # _looks_like_bet_detail() returns False for matchups and many valid picks
+                            # Add a guard to prevent replacing substantial, valid picks
+                            if not _is_reasonable_pick_text(value) or len(value.strip()) < 15:
+                                followup = _find_followup_bet(material, idx + 1)
+                                if followup:
+                                    value = followup
                         value = value.strip()
                         in_previous_pick_block = False
                     if value and key == "time":

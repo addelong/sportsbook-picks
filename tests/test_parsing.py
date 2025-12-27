@@ -550,5 +550,59 @@ class ParsingRegressionTest(unittest.TestCase):
         self.assertIn("Stanford", fields["game"])
         self.assertIn("CSUN", fields["game"])
 
+    def test_pick_not_replaced_with_units_line(self) -> None:
+        """Regression test: Don't replace complete pick with 'to win' from units line."""
+        body = dedent(
+            """\
+            NBA Basketball - Saturday 12/27/25
+
+            Pick of the Day: Denver Nuggets -4.5 (-115) @ Orlando Magic
+
+            1 unit to win 0.87 units
+
+            Record: 3-2
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "NBA")
+        self.assertIn("Denver Nuggets", fields["game"])
+        self.assertIn("Orlando Magic", fields["game"])
+        # The key assertion: pick should contain the spread, not just "to win"
+        self.assertIn("-4.5", fields["pick"])
+        self.assertIn("Nuggets", fields["pick"])
+        self.assertNotEqual(fields["pick"], "to win")
+
+    def test_todays_pick_not_last_pick(self) -> None:
+        """Regression test: Extract Today's pick, not Last pick."""
+        body = dedent(
+            """\
+            Overall record 75W-49L
+
+            Last pick:
+            Manchester United Vs Newcastle
+
+            Matheus Cunha 2 or more shots on target.
+
+            (2.10) 2.5 units ✖️
+
+
+            Today's pick:
+
+            Premier League
+
+            Liverpool Vs Wolves
+
+            Liverpool to win and Virgil Van Djik 1 or more shot
+
+            1.80 3 units
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        # The key assertion: game should be Liverpool vs Wolves, NOT Manchester United vs Newcastle
+        self.assertIn("Liverpool", fields["game"])
+        self.assertIn("Wolves", fields["game"])
+        self.assertNotIn("Manchester United", fields["game"])
+        self.assertNotIn("Newcastle", fields["game"])
+
 if __name__ == "__main__":
     unittest.main()
