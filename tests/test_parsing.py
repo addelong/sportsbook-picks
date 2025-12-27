@@ -58,6 +58,24 @@ class ParseRecordTest(unittest.TestCase):
         self.assertEqual(record.pushes, 4)
         self.assertEqual(record.display, "25-8 (4 pushes)")
 
+    def test_record_with_spaced_dash(self) -> None:
+        record = parse_record("Record: 4 - 0")
+        self.assertIsNotNone(record)
+        assert record
+        self.assertEqual(record.wins, 4)
+        self.assertEqual(record.losses, 0)
+        self.assertEqual(record.pushes, 0)
+        self.assertEqual(record.display, "4 - 0")
+
+    def test_record_with_letter_suffixes(self) -> None:
+        record = parse_record("POTD Record: 130w 88l 2p ")
+        self.assertIsNotNone(record)
+        assert record
+        self.assertEqual(record.wins, 130)
+        self.assertEqual(record.losses, 88)
+        self.assertEqual(record.pushes, 2)
+        self.assertEqual(record.display, "130w 88l 2p")
+
 
 class ParsingRegressionTest(unittest.TestCase):
     def test_billycapezzi_reaves_pick_extracted(self) -> None:
@@ -185,6 +203,64 @@ class ParsingRegressionTest(unittest.TestCase):
         self.assertEqual(fields["game"], "Galatasaray - Bodo/Glimt")
         self.assertEqual(fields["sport"], "Soccer")
 
+    def test_tokcliff_badminton_pick(self) -> None:
+        body = dedent(
+            """\
+            Event: Korea Masters Women's Single
+            POTD Record: 130w 88l 2p
+            Date: 3 Nov SGT
+            Net Profit = +42.89 units
+
+            Chiu Pin Chian -5.5 points at 1.83 @ 1.5 units (vs Goh Jin Wei)
+
+            Odds on stake. Difference in class, Goh Jin Wei is just bad, and Chiu on okay form. Follow me or not, up to you, i do this for free
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["pick"], "Chiu Pin Chian -5.5 points at 1.83")
+        self.assertEqual(fields["game"], "Chiu Pin Chian vs Goh Jin Wei")
+        self.assertEqual(fields["recommended_wager"], "1.5 units")
+        self.assertEqual(fields["time"], "3 Nov SGT")
+
+    def test_player_prop_odds_does_not_form_matchup(self) -> None:
+        body = dedent(
+            """\
+            Record: 10-5
+            Pick: Jamal Murray (Nuggets) O30.5 PRA @ 1.89. 3U play.
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["pick"], "Jamal Murray (Nuggets) O30.5 PRA @ 1.89. 3U play.")
+        self.assertIsNone(fields["game"])
+
+    def test_parenthetical_matchup_promoted(self) -> None:
+        body = dedent(
+            """\
+            Today's Pick: Luka Doncic o0.5 Blocks (Spurs vs Lakers)
+            Units: 1.0
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["pick"], "Luka Doncic o0.5 Blocks")
+        self.assertEqual(fields["game"], "Spurs vs Lakers")
+        self.assertEqual(fields["recommended_wager"], "1.0")
+
+    def test_milwaukee_wofford_pick(self) -> None:
+        body = dedent(
+            """\
+            Record: 2-1 (66.7%)
+
+            Today’s Pick: [NCAA Basketball] Milwaukee -1.5 vs Wofford (Caesars -110) 2:00 PM EST
+
+            Once again this is gambling at the end of the day so bet responsibly, control your emotions, and best of luck
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["game"], "Milwaukee vs Wofford")
+        self.assertEqual(fields["pick"], "Milwaukee -1.5 (Caesars -110) 2:00 PM EST")
+        self.assertEqual(fields["time"], "2:00 PM EST")
+        self.assertEqual(fields["sport"], "NCAA")
+
     def test_olivecritical_pick_preferred(self) -> None:
         body = dedent(
             """\
@@ -213,6 +289,83 @@ class ParsingRegressionTest(unittest.TestCase):
         fields = extract_pick_fields(body.splitlines())
         self.assertIsNone(fields["pick"])
         self.assertIsNone(fields["game"])
+
+    def test_sport_not_extracted_from_record_breakdown(self) -> None:
+        body = dedent(
+            """\
+            **POTD Record: 11-4 (+23.43 Units)**
+
+            **E-Sports 9-1 | NBA 2-1 | NFL 0-2**
+
+            **Event:** Pro Dart World Championship
+
+            **Pick:** Wesley Plaisier +1.5 vs. Krzysztof Ratajski @ 1.67 (5 Units)
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "Darts")
+        self.assertIsNotNone(fields["pick"])
+
+    def test_boxing_day_does_not_extract_boxing_sport(self) -> None:
+        body = dedent(
+            """\
+            **POTD Record:** 101 – 66 - 10
+
+            **New Event:** EPL – Nottingham Forest vs Manchester City
+
+            **Pick:**  Manchester City -1 @ 1.88 (Usual 3 units)
+
+            The day after Boxing Day just happens to fall on a Saturday.
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertIn(fields["sport"], ["Soccer", "EPL"])
+        self.assertIn("Nottingham Forest", fields["game"])
+        self.assertIn("Manchester City", fields["game"])
+
+    def test_time_string_not_extracted_as_sport(self) -> None:
+        body = dedent(
+            """\
+            Record: 2-4
+
+            Event: England Premier League | 12:30 PM EST
+
+            POTD: Aston Villa Double Chance vs Chelsea @ 1.99 odds (3u)
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "Soccer")
+        self.assertEqual(fields["pick"], "Aston Villa Double Chance")
+        self.assertIn("Chelsea", fields["game"])
+
+    def test_leading_and_stripped_from_game(self) -> None:
+        body = dedent(
+            """\
+            Record: 2-2
+
+            Soccer | Premier League
+            Matches: Arsenal vs Brighton & Hove Albion
+            and Nottingham Forest vs Manchester City
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "Soccer")
+        game = fields.get("game") or ""
+        self.assertFalse(game.lower().startswith("and "))
+
+    def test_hockey_extracted_from_parenthetical(self) -> None:
+        body = dedent(
+            """\
+            **POTD Record** : 8-4
+
+            **Today's pick** : Ottawa Senators vs Toronto Maple Leafs at 7:00pm EST (NHL/Hockey)
+
+            Brady Tkachuk over 0.5 points (-175)
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "Hockey")
+        self.assertEqual(fields["time"], "7:00pm EST")
 
     def test_frozenstride_followup_pick_used(self) -> None:
         body = dedent(
