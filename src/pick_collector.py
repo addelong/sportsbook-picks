@@ -721,6 +721,9 @@ def looks_like_plain_matchup(text: str) -> Optional[str]:
         if len(left.strip().split()) > 8 or len(right.strip().split()) > 8:
             return None
     if re.search(r"[A-Za-z].+\s-\s[A-Za-z]", candidate):
+        # Avoid treating sport/league lines as matchups
+        if _sport_token_from_text(candidate):
+            return None
         result = re.sub(r"\s+", " ", candidate)
         if result.lower().startswith("and "):
             result = result[4:].strip()
@@ -1621,6 +1624,9 @@ def _normalize_game_text(game: str) -> Tuple[Optional[str], Optional[str]]:
     cleaned = "".join(ch for ch in cleaned if not 0x1F1E6 <= ord(ch) <= 0x1F1FF)
     cleaned = cleaned.replace("\u2019", "'")
     cleaned = cleaned.rstrip("* ")
+    # Remove markdown formatting (** and __) from the middle of text
+    cleaned = re.sub(r"[*_]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     bracket_match = re.search(r"\[([^\]]+)\]", cleaned)
     sport_from_bracket: Optional[str] = None
     if bracket_match:
@@ -1658,6 +1664,24 @@ def _normalize_game_text(game: str) -> Tuple[Optional[str], Optional[str]]:
             if candidate:
                 sport_candidate = candidate
                 cleaned = remainder.strip()
+
+    # Handle dash-separated sport prefixes like "EPL – TeamA vs TeamB" or "NFL TeamA @ TeamB"
+    if not sport_candidate:
+        # Try splitting on various dash characters
+        for dash_char in ["\u2013", "\u2014", "-"]:
+            if dash_char in cleaned:
+                parts = cleaned.split(dash_char, 1)
+                if len(parts) == 2:
+                    leading = parts[0].strip()
+                    remainder = parts[1].strip()
+                    # Check if leading part is a sport token and remainder has matchup hints
+                    if not _has_matchup_hint(leading) and remainder:
+                        candidate = _sport_token_from_text(leading)
+                        if candidate:
+                            sport_candidate = candidate
+                            cleaned = remainder
+                            break
+
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -|\t")
     cleaned = re.sub(r"\b(pick|play)\b\s*$", "", cleaned, flags=re.I)
     if sport_from_bracket:
@@ -1849,6 +1873,9 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                 "todays play",
                 "potd",
                 "event",
+                "new event",
+                "todays event",
+                "today's event",
                 "game",
                 "pick",
                 "next pick",

@@ -443,5 +443,59 @@ class ParsingRegressionTest(unittest.TestCase):
         self.assertEqual(fields["pick"], "ML + O1.5 Goals @-102")
         self.assertEqual(fields["recommended_wager"], "2u")
 
+    def test_epl_with_previous_and_new_event(self) -> None:
+        body = dedent(
+            """\
+            **POTD Record:** 101 – 66 - 10
+
+            **Previous:**  EPL – Manchester United vs Newcastle Draw no Bet – LOST
+
+            **Recap:** Early goal by United defended until the end.
+
+            **New Event:** EPL – Nottingham Forest vs Manchester City
+
+            **Pick:**  Manchester City -1 @ 1.88 (Usual 3 units)
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "EPL")
+        self.assertEqual(fields["game"], "Nottingham Forest vs Manchester City")
+        self.assertEqual(fields["pick"], "Manchester City -1 @ 1.88")
+
+    def test_hockey_league_line_not_treated_as_matchup(self) -> None:
+        body = dedent(
+            """\
+            Record: 34-15
+
+            International Hockey U20 - World Junior Championship
+
+            Pick: Czechia vs. Denmark | Czechia -4.5 (-130)
+
+            Time: 8:30pm EST
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "Hockey")
+        self.assertEqual(fields["game"], "Czechia vs Denmark")
+        self.assertEqual(fields["pick"], "Czechia -4.5 (-130)")
+
+    def test_nfl_with_football_emoji(self) -> None:
+        body = dedent(
+            """\
+            **Record**: 20-12
+
+            **Net Units**: +7.01
+
+            **Todays Event** 🏈 NFL Saturday Night Football  Ravens @ Packers  7:15 PM CST 🏈
+
+            **Todays Pick**  Emanuel Wilson o30.5 rushing yards (-112 on DK) 1u to win 0.89u
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        # Should extract sport from emoji or NFL mention
+        self.assertIn(fields["sport"], ["Football", "NFL"])
+        self.assertIn("Ravens", fields["game"])
+        self.assertIn("Packers", fields["game"])
+
 if __name__ == "__main__":
     unittest.main()
