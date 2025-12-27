@@ -1733,6 +1733,9 @@ def _normalize_game_text(game: str) -> Tuple[Optional[str], Optional[str]]:
                 if len(parts) == 2:
                     leading = parts[0].strip()
                     remainder = parts[1].strip()
+                    # Skip if this looks like a spread (dash followed by a digit)
+                    if remainder and remainder[0].isdigit():
+                        continue
                     # Check if leading part is a sport token and remainder has matchup hints
                     if not _has_matchup_hint(leading) and remainder:
                         candidate = _sport_token_from_text(leading)
@@ -1757,7 +1760,32 @@ def _clean_time_value(value: str) -> str:
     cleaned = re.sub(r"^(?:kick(?:-?off)?)(?:\s*time)?\b[:\-\s]*", "", cleaned, flags=re.I)
     cleaned = re.sub(r"^start(?:\s*time)?\b[:\-\s]*", "", cleaned, flags=re.I)
     cleaned = re.sub(r"\s*\([^)]*\)\s*$", "", cleaned)
-    return cleaned.strip()
+    cleaned = cleaned.strip()
+
+    # Validate that this actually looks like a time value
+    # A valid time should contain digits and be relatively short (< 50 chars)
+    # or contain time-related keywords (AM/PM, timezone abbreviations, etc.)
+    if len(cleaned) > 50:
+        # Too long to be a reasonable time value
+        return ""
+
+    # Check if it contains time indicators
+    has_time_indicator = bool(re.search(
+        r'\d+[:\.]?\d*\s*(?:am|pm|est|edt|pst|pdt|cst|cdt|mst|mdt|gmt|utc)|'  # 7:30 PM, 19:00 EST
+        r'\d{1,2}[:\-]\d{2}|'  # 7:30, 19:00
+        r'\b\d{1,2}\s*(?:am|pm)\b|'  # 7 PM
+        r'(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|'  # Day names
+        r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|'  # Month abbreviations
+        r'\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b',  # Date formats like 12/27 or 12/27/25
+        cleaned,
+        re.I
+    ))
+
+    if not has_time_indicator:
+        # Doesn't look like a time, reject it
+        return ""
+
+    return cleaned
 
 
 def _cleanup_pick_detail(detail: str) -> str:
