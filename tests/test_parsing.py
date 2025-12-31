@@ -604,5 +604,69 @@ class ParsingRegressionTest(unittest.TestCase):
         self.assertNotIn("Manchester United", fields["game"])
         self.assertNotIn("Newcastle", fields["game"])
 
+    def test_a_league_detected_as_soccer(self) -> None:
+        """Regression test: A-League Men should be detected as Soccer."""
+        body = dedent(
+            """\
+            **Event:** A-League Men, Central Coast Mariners v Brisbane Roar
+
+            **POTD:** Central Coast Mariners Win or Draw -125
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "Soccer")
+        self.assertIn("Central Coast Mariners", fields["game"])
+        self.assertIn("Brisbane Roar", fields["game"])
+
+    def test_sport_emoji_exits_previous_pick_block(self) -> None:
+        """Regression test: Sport emoji line should exit previous pick block."""
+        body = dedent(
+            """\
+            Last POTD: Celtics -8.5 (-110)
+
+            🏀NCAAM🏀
+
+            Today's Event: Witchita State @ UAB
+
+            POTD: UAB ML (-160)
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "Ncaam")
+        self.assertIn("UAB", fields["game"])
+        self.assertIn("-160", fields["pick"])
+
+    def test_sport_prefix_line_extracts_game(self) -> None:
+        """Regression test: 'Sport : NCAA Football Team vs Team' extracts both sport and game."""
+        body = dedent(
+            """\
+            Last pick: Previous game
+
+            Sport : NCAA Football  Miami FL vs Ohio State 7:30pm EST
+
+            Pick: Ohio State team total over 101.5
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "Football")
+        self.assertIn("Miami", fields["game"])
+        self.assertIn("Ohio State", fields["game"])
+
+    def test_pick_line_with_sport_token_sets_sport(self) -> None:
+        """Regression test: 'Pick: NCAAB' followed by game sets sport correctly."""
+        body = dedent(
+            """\
+            Pick: NCAAB
+            South Alabama vs UL Lafayette
+
+            UNDER 127.5
+            """
+        )
+        fields = extract_pick_fields(body.splitlines())
+        self.assertEqual(fields["sport"], "NCAAB")
+        self.assertIn("South Alabama", fields["game"])
+        self.assertIn("UNDER", fields["pick"])
+
+
 if __name__ == "__main__":
     unittest.main()

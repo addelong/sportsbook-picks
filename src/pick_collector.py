@@ -218,8 +218,14 @@ EMOJI_SPORT_MAP = {
 
 COMMON_SPORT_TOKENS = {
     "afl",
+    "a-league",
+    "a-league men",
+    "a league",
+    "a league men",
     "atp",
     "boxing",
+    "darts",
+    "pdc",
     "bundesliga",
     "cfl",
     "champions league",
@@ -800,6 +806,9 @@ def looks_like_sport_line(text: str) -> Optional[str]:
         return None
     if "record" in lowered or lowered.startswith(("net units", "units", "last pick", "previous pick")):
         return None
+    # Exclude bet detail keywords from being treated as sport lines
+    if any(term in lowered for term in ("over", "under", "spread", "moneyline", "parlay", "total", "handicap")):
+        return None
     if TIME_IN_TEXT.search(candidate):
         return None
     if "|" in candidate and len(candidate) <= 80:
@@ -1115,6 +1124,7 @@ def _find_first_matchup(lines: Iterable[str]) -> Optional[str]:
             (
                 "last pick",
                 "previous pick",
+                "recent pick",
                 "record",
                 "profit",
                 "summary",
@@ -1124,6 +1134,8 @@ def _find_first_matchup(lines: Iterable[str]) -> Optional[str]:
                 "write up",
                 "write-up",
                 "writeup",
+                "sport :",
+                "sport:",
             )
         ):
             continue
@@ -1615,7 +1627,7 @@ def _sport_token_from_text(text: str) -> Optional[str]:
     if not cleaned:
         return None
     lowered = cleaned.lower()
-    if "dart" in lowered or "darts" in lowered:
+    if "dart" in lowered or "darts" in lowered or "pdc" in lowered:
         return "Darts"
     if "hockey" in lowered or "nhl" in lowered:
         return "Hockey"
@@ -1624,6 +1636,8 @@ def _sport_token_from_text(text: str) -> Optional[str]:
     if "bundesliga" in lowered or "premier league" in lowered or "champions league" in lowered or "uefa" in lowered:
         return "Soccer"
     if "serie a" in lowered or "la liga" in lowered or "laliga" in lowered or "mls" in lowered:
+        return "Soccer"
+    if "a league" in lowered or "a-league" in lowered:
         return "Soccer"
     if "college" in lowered and "football" in lowered:
         return "College Football"
@@ -1935,6 +1949,7 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             (
                 "last pick",
                 "previous pick",
+                "recent pick",
                 "prior pick",
                 "prior potd",
                 "last potd",
@@ -1954,6 +1969,8 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             (
                 "today's pick",
                 "todays pick",
+                "today's potd",
+                "todays potd",
                 "today's bet",
                 "todays bet",
                 "today's play",
@@ -1971,6 +1988,15 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
         ):
             in_previous_pick_block = False
         if in_previous_pick_block and "|" in stripped:
+            in_previous_pick_block = False
+        # Exit previous pick block if line contains a sport emoji
+        if in_previous_pick_block:
+            for emoji in EMOJI_SPORT_MAP:
+                if emoji in stripped:
+                    in_previous_pick_block = False
+                    break
+        # Exit previous pick block for "Sport :" prefixed lines
+        if in_previous_pick_block and (normalized_lowered.startswith("sport :") or normalized_lowered.startswith("sport:")):
             in_previous_pick_block = False
         if normalized_lowered.startswith(("units won", "profit/loss", "profit loss", "profit", "loss")):
             continue
@@ -2042,6 +2068,33 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                             continue
                         value = _strip_pick_value_prefix(value)
                         value = value.strip()
+                        # Check if pick value is actually a sport token (e.g., "Pick: NCAAB")
+                        # or slash-separated sport/pick (e.g., "Pick: NCAAB / Stanford vs CSUN")
+                        # If so, set sport and extract the actual pick
+                        if "/" in value and not result.get("sport"):
+                            # Check for slash-separated sport/pick pattern
+                            parts = [p.strip() for p in value.split("/", 1)]
+                            first_part_sport = _sport_token_from_text(parts[0])
+                            if first_part_sport and not _looks_like_bet_detail(parts[0]):
+                                result["sport"] = first_part_sport
+                                sport_line_index = idx
+                                # Use the part after the slash as the value
+                                if len(parts) > 1 and parts[1]:
+                                    value = parts[1].strip()
+                                else:
+                                    followup = _find_followup_bet(material, idx + 1)
+                                    value = followup.strip() if followup else ""
+                        elif not result.get("sport"):
+                            pick_as_sport = _sport_token_from_text(value)
+                            if pick_as_sport and not _looks_like_bet_detail(value):
+                                result["sport"] = pick_as_sport
+                                sport_line_index = idx
+                                # Try to find actual pick from subsequent lines
+                                followup = _find_followup_bet(material, idx + 1)
+                                if followup:
+                                    value = followup.strip()
+                                else:
+                                    value = ""  # Clear the sport-as-pick value
                         matchup_candidate = looks_like_plain_matchup(value) if value else None
                         if matchup_candidate:
                             value_lower = value.lower()
@@ -2144,6 +2197,29 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                             if not existing or _should_replace_sport(existing, value):
                                 result[key] = value
                                 sport_line_index = idx
+                                # Also try to extract game from the original match if present
+                                # (e.g., "Sport : NCAA Football Miami FL vs Ohio State")
+                                original_sport_value = match.group(1).strip() if match.groups() else ""
+                                if original_sport_value and _has_matchup_hint(original_sport_value):
+                                    # Strip sport token from front to get game portion
+                                    sport_prefix_pattern = re.compile(
+                                        r'^(ncaa\s*football|ncaaf|ncaa\s*basketball|ncaab|ncaa\s*hockey|'
+                                        r'nfl|nba|mlb|nhl|mls|college\s*football|college\s*basketball|'
+                                        r'epl|premier\s*league|la\s*liga|serie\s*a|bundesliga|ligue\s*1|'
+                                        r'champions\s*league|ucl|soccer|football|basketball|baseball|hockey|'
+                                        r'tennis|golf|boxing|mma|ufc|cricket|rugby|darts|snooker|esports)\s*',
+                                        re.I
+                                    )
+                                    sport_match = sport_prefix_pattern.match(original_sport_value)
+                                    if sport_match:
+                                        game_portion = original_sport_value[sport_match.end():].strip()
+                                    else:
+                                        game_portion = original_sport_value
+                                    if game_portion and not result.get("game"):
+                                        matchup = looks_like_plain_matchup(game_portion)
+                                        if matchup:
+                                            result["game"] = matchup
+                                            game_line_index = idx
                             else:
                                 continue
                         elif key == "recommended_wager":
@@ -2216,7 +2292,33 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
                 needs_game = True
         if needs_game:
             lowered_stripped = stripped.lower()
-            if lowered_stripped.startswith("at ") or lowered_stripped.startswith("last pick"):
+            if lowered_stripped.startswith(("at ", "last pick", "recent pick")):
+                continue
+            # Handle "Sport :" prefixed lines - extract both sport and game
+            if lowered_stripped.startswith("sport :") or lowered_stripped.startswith("sport:"):
+                _, _, remainder = stripped.partition(":")
+                remainder = remainder.strip()
+                # Try to extract sport and game from remainder
+                sport_prefix_pattern = re.compile(
+                    r'^(ncaa\s*football|ncaaf|ncaa\s*basketball|ncaab|ncaa\s*hockey|'
+                    r'nfl|nba|mlb|nhl|mls|college\s*football|college\s*basketball|'
+                    r'epl|premier\s*league|la\s*liga|serie\s*a|bundesliga|ligue\s*1|'
+                    r'champions\s*league|ucl|soccer|football|basketball|baseball|hockey|'
+                    r'tennis|golf|boxing|mma|ufc|cricket|rugby|darts|snooker|esports)\s*',
+                    re.I
+                )
+                sport_match = sport_prefix_pattern.match(remainder)
+                if sport_match:
+                    if not result["sport"]:
+                        result["sport"] = _sport_token_from_text(sport_match.group(1)) or sport_match.group(1).strip()
+                    game_portion = remainder[sport_match.end():].strip()
+                else:
+                    game_portion = remainder
+                if game_portion:
+                    matchup = looks_like_plain_matchup(game_portion)
+                    if matchup:
+                        result["game"] = matchup
+                        game_line_index = idx
                 continue
             candidate_game_line = _strip_pick_value_prefix(stripped)
             matchup = looks_like_plain_matchup(candidate_game_line) or looks_like_plain_matchup(stripped)
@@ -2483,6 +2585,18 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
             stripped_game = _strip_pick_value_prefix(str(result["game"]))
             if stripped_game and stripped_game != result["game"]:
                 result["game"] = stripped_game
+            # Strip "Sport :" prefix and sport name from game if present
+            game_lower = result["game"].lower()
+            if game_lower.startswith("sport :") or game_lower.startswith("sport:"):
+                _, _, remainder = result["game"].partition(":")
+                remainder = remainder.strip()
+                # Try to strip leading sport token (e.g., "NCAA Football")
+                for token in COMMON_SPORT_TOKENS:
+                    if remainder.lower().startswith(token):
+                        remainder = remainder[len(token):].strip()
+                        break
+                if remainder:
+                    result["game"] = remainder
             sanitized_game = re.split(r"@\s*-?\d+(?:\.\d+)?", result["game"], maxsplit=1)[0]
             sanitized_game = re.sub(r"\s+\d+(?:\.\d+)?\s*(?:u|units?)$", "", sanitized_game, flags=re.I)
             sanitized_game = sanitized_game.strip(" ,;/@\t")
@@ -2502,6 +2616,12 @@ def extract_pick_fields(lines: Iterable[str]) -> dict:
 
     if result["sport"] and "potd" in result["sport"].lower():
         result["sport"] = None
+    # If pick is a sport token and not a bet detail, treat it as sport
+    if result["pick"] and not result.get("sport"):
+        pick_as_sport = _sport_token_from_text(result["pick"])
+        if pick_as_sport and not _looks_like_bet_detail(result["pick"]):
+            result["sport"] = pick_as_sport
+            result["pick"] = None
     if result["pick"] and result["sport"] and result["pick"].strip().lower() == result["sport"].strip().lower():
         result["pick"] = None
 
